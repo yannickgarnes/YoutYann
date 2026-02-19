@@ -2,7 +2,7 @@
 google-api-python-client
 google-auth-oauthlib
 google-auth-httplib2
-openai
+google-generativeai
 yt-dlp
 requests
 ffmpeg-python
