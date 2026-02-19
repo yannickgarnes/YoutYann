@@ -1,0 +1,39 @@
+
+name: Viral Shorts Factory
+
+on:
+  schedule:
+    - cron: '0 13,18,21 * * *' # Ejecutar a las 14:00, 19:00 y 22:00 (Hora aproximada UTC+1)
+  workflow_dispatch: # Botón manual para forzar subida
+
+jobs:
+  viral_bot_job:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout del código
+      uses: actions/checkout@v3
+
+    - name: Configurar Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.10'
+
+    - name: Instalar FFmpeg (Necesario para audio)
+      run: |
+        sudo apt-get update
+        sudo apt-get install ffmpeg
+
+    - name: Instalar librerías
+      run: |
+        pip install -r requirements.txt
+
+    - name: EJECUTAR BOT VIRAL
+      env:
+        YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+        OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        CREATOMATE_API_KEY: ${{ secrets.CREATOMATE_API_KEY }}
+        CREATOMATE_TEMPLATE_ID: ${{ secrets.CREATOMATE_TEMPLATE_ID }}
+        YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }} # ¡CRUCIAL!
+      run: |
+        python viral_bot.py
