@@ -9,7 +9,7 @@ import logging
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
-from openai import OpenAI
+import google.generativeai as genai
 from datetime import datetime, timedelta
 
 # --- CONFIGURACIÓN DE LOGGER (Para verlo todo clarito) ---
@@ -18,26 +18,31 @@ logger = logging.getLogger(__name__)
 
 # --- CONFIGURACIÓN ENV (GitHub Secrets) ---
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY") 
-OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
-CREATOMATE_API_KEY = os.environ.get("CREATOMATE_API_KEY") # Clave para renderizar el vídeo
-CREATOMATE_TEMPLATE_ID = os.environ.get("CREATOMATE_TEMPLATE_ID") # ID de tu plantilla vertical
-YOUTUBE_TOKEN_JSON = os.environ.get("YOUTUBE_TOKEN_JSON") # Contenido del token.json para subir
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+CREATOMATE_API_KEY = os.environ.get("CREATOMATE_API_KEY") 
+# Usaremos una plantilla pública de Creatomate que sabemos que funciona (Auto-Captions)
+# ID: c023d838-8e6d-4786-8dce-09695d8f6d3f (Si el usuario no ha puesto una propia)
+CREATOMATE_TEMPLATE_ID = os.environ.get("CREATOMATE_TEMPLATE_ID") or "c023d838-8e6d-4786-8dce-09695d8f6d3f"
+YOUTUBE_TOKEN_JSON = os.environ.get("YOUTUBE_TOKEN_JSON") 
 
-# Canales a monitorear (si no hay búsqueda genérica)
+# Canales a monitorear
 CHANNELS_TO_WATCH = ["Ibai Llanos", "TheGrefg", "ElRubius", "AuronPlay", "IlloJuan"]
 
 # Inicializar clientes
 try:
     if YOUTUBE_API_KEY:
         youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
-    client = OpenAI(api_key=OPENAI_API_KEY)
+    
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel('gemini-1.5-flash') 
+    
 except Exception as e:
     logger.error(f"Error al iniciar clientes: {e}")
     sys.exit(1)
 
 def search_trending_video():
     """Busca el video más reciente y viral de los canales top"""
-    # Buscar solo videos de las últimas 24 horas
     yesterday = (datetime.utcnow() - timedelta(days=1)).isoformat("T") + "Z"
     
     query = "|".join(CHANNELS_TO_WATCH)
@@ -48,10 +53,10 @@ def search_trending_video():
             part="snippet",
             q=query,
             type="video",
-            order="date", # Lo más nuevo primero
+            order="date", 
             publishedAfter=yesterday,
             maxResults=1,
-            videoDuration="long" # Filtrar videos largos (>20min) para tener "chicha"
+            videoDuration="long" 
         )
         response = request.execute()
         
@@ -75,7 +80,9 @@ def search_trending_video():
         return None
 
 def download_audio_and_transcribe(video_url):
-    """Descarga audio temporal y transcribe con Whisper (optimizado)"""
+    """
+    Descarga el audio y lo sube a Gemini para que lo escuche.
+    """
     logger.info("⬇️ Descargando audio del video...")
     
     ydl_opts = {
@@ -90,63 +97,61 @@ def download_audio_and_transcribe(video_url):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
             
-        logger.info("👂 Transcribiendo audio con OpenAI Whisper...")
-        audio_file = open("temp_audio.mp3", "rb")
+        logger.info("🧠 Subiendo audio a Gemini para análisis directo...")
         
-        # Usamos whisper-1
-        transcription = client.audio.transcriptions.create(
-            model="whisper-1", 
-            file=audio_file,
-            response_format="text"
-        )
-        audio_file.close() # Cerrar archivo
-        os.remove("temp_audio.mp3") # Limpiar basura
+        audio_file = genai.upload_file(path="temp_audio.mp3")
         
-        return transcription
+        while audio_file.state.name == "PROCESSING":
+            time.sleep(2)
+            audio_file = genai.get_file(audio_file.name)
+
+        if audio_file.state.name == "FAILED":
+            raise ValueError("Fallo al procesar audio en Gemini")
+            
+        return audio_file
         
     except Exception as e:
-        logger.error(f"❌ Error en descarga/transcripción: {e}")
+        logger.error(f"❌ Error en descarga/análisis: {e}")
         return None
 
-def analyze_transcript_for_clipper(transcription):
-    """Usa GPT-4o para encontrar el clip viral perfecto (Gancho + Desarrollo + Cierre)"""
-    logger.info("🧠 El Director AI (GPT-4o) está analizando la transcripción...")
+def analyze_transcript_for_clipper(audio_file_gemini):
+    """Usa Gemini 1.5 Flash para encontrar el clip viral escuchando el audio"""
+    logger.info("🧠 Gemini está escuchando el audio para encontrar el clip...")
     
-    # Acortar texto si es gigante para no quebrar el token limit
-    # (Un video de 1 hora son ~9000-10000 palabras)
-    transcript_preview = transcription[:25000] 
+    prompt = """
+    Actúa como un editor experto de videos virales para TikTok.
+    Escucha este audio atentamente. Tu misión es identificar el segmento MÁS DIVERTIDO, IMPACTANTE O VIRAL.
     
-    system_prompt = """
-    Eres el mejor editor de TikTok del mundo. Tu trabajo es encontrar el momento MÁS VIRAL en una transcripción.
+    Reglas:
+    1. Duración: Entre 30 y 50 segundos.
+    2. Debe tener un inicio claro (gancho) y un final coherente.
+    3. Retorna la respuesta EXCLUSIVAMENTE en formato JSON.
     
-    Reglas de Oro:
-    1. Duración: 30 a 55 segundos.
-    2. Gancho (0-3s): Debe empezar con una frase fuerte, grito, o declaración polémica.
-    3. Cierre: No cortes una frase a medias. Debe sentirse completo.
-    
-    Formato de Salida JSON:
+    Formato JSON esperado:
     {
-        "start_time": (float, segundos exactos donde empieza),
-        "end_time": (float, segundos exactos donde acaba),
-        "viral_title": (string, título clickbait con emojis),
-        "captions_highlight": (string, las 3-4 palabras más importantes para resaltar en amarillo)
+        "start_time": (número en segundos, ej: 120.5),
+        "end_time": (número en segundos, ej: 165.2),
+        "viral_title": (título clickbait corto con emojis),
+        "summary": (breve explicación de por qué es viral)
     }
     """
     
-    user_prompt = f"Analiza esta transcripción y dame el clip:\n\n{transcript_preview}"
-    
     try:
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ]
+        response = model.generate_content(
+            [prompt, audio_file_gemini],
+            generation_config={"response_mime_type": "application/json"}
         )
         
-        result = json.loads(response.choices[0].message.content)
+        result = json.loads(response.text)
         logger.info(f"💡 Clip detectado: '{result['viral_title']}' ({result['start_time']}s - {result['end_time']}s)")
+        
+        # Limpieza
+        try:
+            genai.delete_file(audio_file_gemini.name)
+            os.remove("temp_audio.mp3") 
+        except:
+            pass
+
         return result
         
     except Exception as e:
@@ -154,22 +159,24 @@ def analyze_transcript_for_clipper(transcription):
         return None
 
 def render_viral_video(video_id, analysis):
-    """Manda a renderizar a Creatomate usando la plantilla Hormozi"""
+    """Manda a renderizar a Creatomate usando la plantilla correcta (Auto-Captions)"""
     logger.info("🎨 Renderizando video con subtítulos dinámicos en Creatomate...")
     
+    # Usamos la v1 api endpoint que es muy estable para renders simples
     url = "https://api.creatomate.com/v1/renders"
     headers = {
         "Authorization": f"Bearer {CREATOMATE_API_KEY}",
         "Content-Type": "application/json"
     }
     
-    # Mapeo de datos para la plantilla (Asegúrate que tu plantilla tenga estos elementos)
+    # Mapeo para la plantilla "Auto-Captions" (c023d838...)
+    # Esta plantilla tiene 'Video' (source), 'Text' (encabezado) y 'Subtitles' (auto)
     modifications = {
-        "Video": f"https://www.youtube.com/watch?v={video_id}", # Creatomate descarga directo de YT
+        "Video": f"https://www.youtube.com/watch?v={video_id}", # Creatomate descarga directo
         "TrimStart": analysis['start_time'],
         "TrimDuration": analysis['end_time'] - analysis['start_time'],
-        "Text": analysis['viral_title'], # Título superior (si lo tienes en el template)
-        # Ojo: Creatomate tiene auto-transcripción en el template si usas el elemento 'Subtitles'
+        "Text": analysis['viral_title'], # Título superior
+        # "Subtitles": "auto" # Esto suele estar activado por defecto en la plantilla
     }
     
     payload = {
@@ -179,15 +186,14 @@ def render_viral_video(video_id, analysis):
     
     try:
         response = requests.post(url, headers=headers, json=payload)
-        response.raise_for_status() # Lanza error si falla HTTP
+        response.raise_for_status() 
         
         render_data = response.json()
         render_id = render_data[0]['id']
         logger.info(f"⏳ Procesando render ({render_id})... Esperando resultado...")
         
-        # Polling (Esperar a que termine)
         attempts = 0
-        while attempts < 60: # Max 5 mins
+        while attempts < 60: 
             time.sleep(5)
             status_res = requests.get(f"{url}/{render_id}", headers=headers).json()
             status = status_res['status']
@@ -205,25 +211,25 @@ def render_viral_video(video_id, analysis):
 
     except Exception as e:
         logger.error(f"❌ Error conectando con Creatomate: {e}")
+        # Si falla por template, avisamos
+        if response.status_code == 400:
+            logger.error("⚠️ Consejo: Revisa que el ID de la plantilla sea correcto y acepte 'Video' como modificación.")
         return None
 
 def upload_to_youtube_shorts(video_url, title, description):
     """Sube el video final a YouTube Shorts"""
     logger.info("🚀 Preparando subida a YouTube Shorts...")
     
-    # 1. Descargar el video renderizado al disco local para subirlo
-    video_filename = "final_viral_short.mp4"
-    r = requests.get(video_url)
-    with open(video_filename, "wb") as f:
-        f.write(r.content)
-        
-    # 2. Autenticación OAuth (Usando el token.json secreto)
     if not YOUTUBE_TOKEN_JSON:
         logger.error("❌ NO HAY TOKEN.JSON: No se puede subir el video automáticamente.")
         return
 
     try:
-        # Convertir string JSON de env var a diccionario y luego a credenciales
+        # Descargar video
+        r = requests.get(video_url)
+        with open("final_short.mp4", "wb") as f:
+            f.write(r.content)
+
         token_data = json.loads(YOUTUBE_TOKEN_JSON)
         creds = Credentials.from_authorized_user_info(token_data, ['https://www.googleapis.com/auth/youtube.upload'])
         
@@ -231,18 +237,18 @@ def upload_to_youtube_shorts(video_url, title, description):
         
         body = {
             'snippet': {
-                'title': title, # Máx 100 caracteres
+                'title': title, 
                 'description': description,
                 'tags': ['shorts', 'viral', 'clip', 'español'],
-                'categoryId': '24' # Categoría: Entretenimiento
+                'categoryId': '24' 
             },
             'status': {
-                'privacyStatus': 'public', # ¡DIRECTO A PÚBLICO!
+                'privacyStatus': 'public', 
                 'selfDeclaredMadeForKids': False
             }
         }
         
-        media_body = MediaFileUpload(video_filename, chunksize=-1, resumable=True)
+        media_body = MediaFileUpload("final_short.mp4", chunksize=-1, resumable=True)
         
         logger.info("📡 Subiendo bytes a YouTube...")
         request = service.videos().insert(
@@ -258,35 +264,34 @@ def upload_to_youtube_shorts(video_url, title, description):
     except Exception as e:
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
-# --- ORQUESTADOR PRINCIPAL ---
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIIP ARCHITECT'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIIP v2.1 (Auto-Fix Template)'...")
     
     # 1. Buscar
     video_data = search_trending_video()
     if not video_data:
         return
 
-    # 2. Transcribir
-    transcription = download_audio_and_transcribe(video_data['url'])
-    if not transcription:
+    # 2. Descargar y subir audio a Gemini
+    audio_file = download_audio_and_transcribe(video_data['url'])
+    if not audio_file:
         return
 
-    # 3. Analizar (AI Director)
-    analysis = analyze_transcript_for_clipper(transcription)
+    # 3. Analizar con Gemini Flash
+    analysis = analyze_transcript_for_clipper(audio_file)
     if not analysis:
         return
 
-    # 4. Renderizar (Editar)
+    # 4. Renderizar
     final_video_url = render_viral_video(video_data['id'], analysis)
     if not final_video_url:
         return
 
     # 5. Subir
-    full_description = f"{analysis['viral_title']}\n\n#shorts #viral #ibai #clips\n\nCréditos: {video_data['channel']}"
+    full_description = f"{analysis['viral_title']}\n\n#shorts #viral #clips\n\nCréditos: {video_data['channel']}"
     upload_to_youtube_shorts(final_video_url, analysis['viral_title'], full_description)
 
-    logger.info("😴 Ciclo terminado. A mimir.")
+    logger.info("😴 Ciclo terminado.")
 
 if __name__ == "__main__":
     main()
