@@ -1,3 +1,4 @@
+
 name: Viral Shorts Factory
 
 on:
@@ -27,14 +28,15 @@ jobs:
       run: |
         pip install -r requirements.txt
 
-    # ¡ESTE ES EL PASO CLAVE!
-    # Asegúrate de que los nombres a la izquierda (ENV) coinciden con los secretos a la derecha
+    - name: DEBUG - Ver variables ENV
+      # Muestra si las variables llegan, ocultando su contenido real por seguridad
+      run: env | grep _KEY || echo "No API Keys found"
+
     - name: EJECUTAR BOT VIRAL
       env:
-        # A la izquierda: Nombre que Python espera (os.environ.get("..."))
-        # A la derecha: Nombre que pusiste en GitHub Secrets
+        # ATENCIÓN: He cambiado OPENAI_API_KEY por GEMINI_API_KEY que es lo que usas ahora
         YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
-        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}  
+        GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         CREATOMATE_API_KEY: ${{ secrets.CREATOMATE_API_KEY }}
         CREATOMATE_TEMPLATE_ID: ${{ secrets.CREATOMATE_TEMPLATE_ID }}
         YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }} 
