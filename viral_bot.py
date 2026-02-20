@@ -9,7 +9,6 @@ import logging
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
-# IMPORTANTE: Nueva librería cliente oficial de Google GenAI (v1.0+)
 from google import genai
 from google.genai import types
 from datetime import datetime, timedelta
@@ -18,9 +17,18 @@ from datetime import datetime, timedelta
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURACIÓN ENV ---
-YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY") 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# --- CONFIGURACIÓN ENV (HARDCODED) ---
+# Si las variables de entorno están vacías (porque GitHub falla), usamos los valores directos.
+# ¡CUIDADO! Esto expone tus keys si el repo es público. Asegúrate de que sea PRIVADO.
+
+ENV_YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
+ENV_GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+
+# Asignación con fallback (Si env falla, usa la key directa)
+YOUTUBE_API_KEY = ENV_YOUTUBE_API_KEY if ENV_YOUTUBE_API_KEY else "AIzaSyAtgNFFZvAp0C0BZpl57IVVcvShPR1V6cw"
+GEMINI_API_KEY = ENV_GEMINI_API_KEY if ENV_GEMINI_API_KEY else "AIzaSyBSU4S0XSJBCMUurrWJrU3qddTxwBygV0Y"
+
+# Creatomate (Intentamos leer de env, si no falla)
 CREATOMATE_API_KEY = os.environ.get("CREATOMATE_API_KEY") 
 CREATOMATE_TEMPLATE_ID = os.environ.get("CREATOMATE_TEMPLATE_ID") or "c023d838-8e6d-4786-8dce-09695d8f6d3f"
 YOUTUBE_TOKEN_JSON = os.environ.get("YOUTUBE_TOKEN_JSON") 
@@ -30,22 +38,20 @@ CHANNELS_TO_WATCH = ["Ibai Llanos", "TheGrefg", "ElRubius", "AuronPlay", "IlloJu
 
 # Inicializar clientes (GLOBALMENTE)
 youtube = None 
-client_gemini = None # Cliente GenAI nuevo
+client_gemini = None 
 
 try:
     if YOUTUBE_API_KEY:
         youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+        logger.info("✅ YouTube Client OK (Key Hardcoded/Env)")
     else:
-        logger.error("❌ FALTA LA API KEY DE YOUTUBE en GitHub Secrets.")
+        logger.error("❌ FALTA LA API KEY DE YOUTUBE (Ni Env ni Hardcoded).")
     
     if GEMINI_API_KEY:
-        # Nueva sintaxis para la librería google-genai v1.0
         client_gemini = genai.Client(api_key=GEMINI_API_KEY)
+        logger.info("✅ Gemini Client OK (Key Hardcoded/Env)")
     else:
-         logger.error("❌ FALTA LA API KEY DE GEMINI en GitHub Secrets.")
-    
-    if not CREATOMATE_API_KEY:
-        logger.warning("⚠️ OJO: No veo la API Key de Creatomate. El renderizado fallará.")
+         logger.error("❌ FALTA LA API KEY DE GEMINI.")
 
 except Exception as e:
     logger.error(f"Error grave al iniciar clientes: {e}")
@@ -95,7 +101,7 @@ def search_trending_video():
 
 def download_audio_and_transcribe(video_url):
     """
-    Descarga el audio y lo sube via File API (válido para Gemini y GenAI SDK).
+    Descarga el audio y lo sube via File API.
     """
     logger.info("⬇️ Descargando audio del video...")
     
@@ -114,10 +120,8 @@ def download_audio_and_transcribe(video_url):
         logger.info("🧠 Subiendo audio a Google GenAI para análisis...")
         
         if not client_gemini:
-             raise ValueError("Cliente Gemini no iniciado (Falta API Key)")
+             raise ValueError("Cliente Gemini no iniciado")
 
-        # Subida con la nueva librería
-        # Ojo: la librería nueva puede pedir 'mime_type' explícito
         with open("temp_audio.mp3", "rb") as f:
             upload_response = client_gemini.files.upload(
                 file=f,
@@ -126,7 +130,6 @@ def download_audio_and_transcribe(video_url):
         
         logger.info(f"Subido con ID: {upload_response.name}. Esperando procesamiento...")
 
-        # Esperar estado ACTIVE
         while True:
             file_meta = client_gemini.files.get(name=upload_response.name)
             if file_meta.state == "ACTIVE":
@@ -189,7 +192,6 @@ def analyze_transcript_for_clipper(audio_file_obj):
         result = json.loads(response.text)
         logger.info(f"💡 Clip detectado: '{result['viral_title']}' ({result['start_time']}s - {result['end_time']}s)")
         
-        # Limpieza
         try:
              client_gemini.files.delete(name=audio_file_obj.name)
              os.remove("temp_audio.mp3") 
@@ -273,7 +275,7 @@ def upload_to_youtube_shorts(video_url, title, description):
             f.write(r.content)
 
         token_data = json.loads(YOUTUBE_TOKEN_JSON)
-        # Importante: refrescar token si ha caducado (Google Auth lo hace solo si tiene refresh token)
+        # Refrescar token si ha caducado
         creds = Credentials.from_authorized_user_info(token_data, ['https://www.googleapis.com/auth/youtube.upload'])
         
         service = build('youtube', 'v3', credentials=creds)
@@ -308,12 +310,12 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIIP v2.3 (GenAI Upgrade)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIIP v2.4 (Hardcoded Keys)'...")
     
     # 1. Buscar
     video_data = search_trending_video()
     if not video_data:
-        return # Ya hay log de error dentro
+        return 
 
     # 2. Descargar y subir audio (Nuevo cliente GenAI)
     audio_file = download_audio_and_transcribe(video_data['url'])
