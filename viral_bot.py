@@ -12,37 +12,46 @@ from google.oauth2.credentials import Credentials
 import google.generativeai as genai
 from datetime import datetime, timedelta
 
-# --- CONFIGURACIÓN DE LOGGER (Para verlo todo clarito) ---
+# --- CONFIGURACIÓN DE LOGGER ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURACIÓN ENV (GitHub Secrets) ---
+# --- CONFIGURACIÓN ENV ---
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY") 
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 CREATOMATE_API_KEY = os.environ.get("CREATOMATE_API_KEY") 
-# Usaremos una plantilla pública de Creatomate que sabemos que funciona (Auto-Captions)
-# ID: c023d838-8e6d-4786-8dce-09695d8f6d3f (Si el usuario no ha puesto una propia)
 CREATOMATE_TEMPLATE_ID = os.environ.get("CREATOMATE_TEMPLATE_ID") or "c023d838-8e6d-4786-8dce-09695d8f6d3f"
 YOUTUBE_TOKEN_JSON = os.environ.get("YOUTUBE_TOKEN_JSON") 
 
 # Canales a monitorear
 CHANNELS_TO_WATCH = ["Ibai Llanos", "TheGrefg", "ElRubius", "AuronPlay", "IlloJuan"]
 
-# Inicializar clientes
+# Inicializar clientes (GLOBALMENTE)
+youtube = None # Definir variable global primero
+model = None
+
 try:
     if YOUTUBE_API_KEY:
         youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
+    else:
+        logger.error("❌ FALTA LA API KEY DE YOUTUBE: Revisa los secretos de GitHub.")
     
     if GEMINI_API_KEY:
         genai.configure(api_key=GEMINI_API_KEY)
         model = genai.GenerativeModel('gemini-1.5-flash') 
-    
+    else:
+         logger.error("❌ FALTA LA API KEY DE GEMINI.")
+
 except Exception as e:
-    logger.error(f"Error al iniciar clientes: {e}")
+    logger.error(f"Error grave al iniciar clientes: {e}")
     sys.exit(1)
 
 def search_trending_video():
     """Busca el video más reciente y viral de los canales top"""
+    if not youtube:
+        logger.error("❌ No puedo buscar videos porque el cliente de YouTube no se ha iniciado.")
+        return None
+
     yesterday = (datetime.utcnow() - timedelta(days=1)).isoformat("T") + "Z"
     
     query = "|".join(CHANNELS_TO_WATCH)
@@ -99,6 +108,9 @@ def download_audio_and_transcribe(video_url):
             
         logger.info("🧠 Subiendo audio a Gemini para análisis directo...")
         
+        if not model:
+             raise ValueError("Cliente Gemini no iniciado")
+
         audio_file = genai.upload_file(path="temp_audio.mp3")
         
         while audio_file.state.name == "PROCESSING":
@@ -137,6 +149,9 @@ def analyze_transcript_for_clipper(audio_file_gemini):
     """
     
     try:
+        if not model:
+            raise ValueError("Modelo Gemini no iniciado")
+
         response = model.generate_content(
             [prompt, audio_file_gemini],
             generation_config={"response_mime_type": "application/json"}
@@ -162,21 +177,17 @@ def render_viral_video(video_id, analysis):
     """Manda a renderizar a Creatomate usando la plantilla correcta (Auto-Captions)"""
     logger.info("🎨 Renderizando video con subtítulos dinámicos en Creatomate...")
     
-    # Usamos la v1 api endpoint que es muy estable para renders simples
     url = "https://api.creatomate.com/v1/renders"
     headers = {
         "Authorization": f"Bearer {CREATOMATE_API_KEY}",
         "Content-Type": "application/json"
     }
     
-    # Mapeo para la plantilla "Auto-Captions" (c023d838...)
-    # Esta plantilla tiene 'Video' (source), 'Text' (encabezado) y 'Subtitles' (auto)
     modifications = {
-        "Video": f"https://www.youtube.com/watch?v={video_id}", # Creatomate descarga directo
+        "Video": f"https://www.youtube.com/watch?v={video_id}", 
         "TrimStart": analysis['start_time'],
         "TrimDuration": analysis['end_time'] - analysis['start_time'],
-        "Text": analysis['viral_title'], # Título superior
-        # "Subtitles": "auto" # Esto suele estar activado por defecto en la plantilla
+        "Text": analysis['viral_title'], 
     }
     
     payload = {
@@ -211,7 +222,6 @@ def render_viral_video(video_id, analysis):
 
     except Exception as e:
         logger.error(f"❌ Error conectando con Creatomate: {e}")
-        # Si falla por template, avisamos
         if response.status_code == 400:
             logger.error("⚠️ Consejo: Revisa que el ID de la plantilla sea correcto y acepte 'Video' como modificación.")
         return None
@@ -265,27 +275,31 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIIP v2.1 (Auto-Fix Template)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIIP v2.2 (Bug Fix)'...")
     
     # 1. Buscar
     video_data = search_trending_video()
     if not video_data:
+        logger.error("❌ No se pudo completar la búsqueda de videos.")
         return
 
     # 2. Descargar y subir audio a Gemini
     audio_file = download_audio_and_transcribe(video_data['url'])
     if not audio_file:
-        return
+         logger.error("❌ Fallo en la descarga o subida del audio.")
+         return
 
     # 3. Analizar con Gemini Flash
     analysis = analyze_transcript_for_clipper(audio_file)
     if not analysis:
-        return
+         logger.error("❌ Fallo en el análisis de Gemini.")
+         return
 
     # 4. Renderizar
     final_video_url = render_viral_video(video_data['id'], analysis)
     if not final_video_url:
-        return
+         logger.error("❌ Fallo en el renderizado con Creatomate.")
+         return
 
     # 5. Subir
     full_description = f"{analysis['viral_title']}\n\n#shorts #viral #clips\n\nCréditos: {video_data['channel']}"
