@@ -3,9 +3,9 @@ import os
 import json
 import time
 import requests
+import yt_dlp
 import sys
 import logging
-import random
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
@@ -18,7 +18,6 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 # --- CONFIGURACIÓN ENV (HARDCODED) ---
-# Usamos las claves directamente si no vienen del entorno (Fallback)
 ENV_YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
 ENV_GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
@@ -32,14 +31,7 @@ YOUTUBE_TOKEN_JSON = os.environ.get("YOUTUBE_TOKEN_JSON")
 # Canales a monitorear
 CHANNELS_TO_WATCH = ["Ibai Llanos", "TheGrefg", "ElRubius", "AuronPlay", "IlloJuan"]
 
-# Instancias de Cobalt API (para rotar si falla una)
-COBALT_INSTANCES = [
-    "https://cobalt.tools",
-    "https://api.cobalt.tools", 
-    "https://co.wuk.sh",
-]
-
-# Inicializar clientes (GLOBALMENTE)
+# Inicializar clientes
 youtube = None 
 client_gemini = None 
 
@@ -102,91 +94,60 @@ def search_trending_video():
         logger.error(f"❌ Error buscando en YouTube: {e}")
         return None
 
-def download_audio_cobalt(video_url):
+def download_audio_and_transcribe(video_url):
     """
-    Descarga el audio usando la API de Cobalt (Anti-Bot) y lo sube via File API.
+    Descarga el audio usando yt-dlp con headers anti-block.
     """
-    logger.info("⬇️ Intentando descargar audio via Cobalt API (Anti-Bot)...")
+    logger.info("⬇️ Descargando audio del video...")
     
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    # Configuración anti-bot para yt-dlp
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}],
+        'outtmpl': 'temp_audio',
+        'quiet': True,
+        'no_warnings': True,
+        'nocheckcertificate': True, # Saltar errores SSL
+        'source_address': '0.0.0.0', # Forzar IPv4
+        # Cabeceras falsas de Chrome para parecer humano
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-us,en;q=0.5',
+            'Sec-Fetch-Mode': 'navigate',
+        }
     }
     
-    # Payload para la API oficial v7 (ha cambiado reciéntemente)
-    payload = {
-        "url": video_url,
-        "aFormat": "mp3", 
-        "isAudioOnly": True,
-        # A veces piden estos flags extra
-        "dubLang": False,
-        "disableMetadata": True
-    }
-    
-    # Intentar con varias instancias si la oficial falla
-    for api_base in COBALT_INSTANCES:
-        api_url = f"{api_base}/api/json"
-        logger.info(f"🌍 Probando instancia: {api_base}...")
-        
-        try:
-            response = requests.post(api_url, json=payload, headers=headers, timeout=15)
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([video_url])
             
-            if response.status_code != 200:
-                logger.warning(f"⚠️ Error {response.status_code} en {api_base}: {response.text}")
-                continue # Probar siguiente
-                
-            data = response.json()
-            
-            if 'url' in data:
-                audio_download_url = data['url']
-                logger.info("📥 Enlace obtenido. Bajando archivo MP3...")
-                
-                # Descargar el binario real
-                audio_res = requests.get(audio_download_url, stream=True)
-                if audio_res.status_code == 200:
-                    with open("temp_audio.mp3", "wb") as f:
-                        for chunk in audio_res.iter_content(chunk_size=8192):
-                            f.write(chunk)
-                    logger.info("✅ Audio guardado: temp_audio.mp3")
-                    
-                    # Subir a Gemini
-                    return upload_to_gemini("temp_audio.mp3")
-                else:
-                    logger.error("❌ Falló la descarga del archivo mp3.")
-            else:
-                 logger.warning(f"⚠️ Respuesta inesperada de Cobalt: {data}")
-
-        except Exception as e:
-            logger.error(f"❌ Excepción con {api_base}: {e}")
-            
-    logger.error("❌ IMPOSIBLE descargar audio con Cobalt. Todas las instancias fallaron.")
-    return None
-
-def upload_to_gemini(filepath):
-    """Sube el archivo local a Google GenAI"""
-    logger.info("🧠 Subiendo audio a Google GenAI para análisis...")
+        logger.info("🧠 Subiendo audio a Google GenAI para análisis...")
         
-    if not client_gemini:
-            raise ValueError("Cliente Gemini no iniciado")
+        if not client_gemini:
+             raise ValueError("Cliente Gemini no iniciado")
 
-    with open(filepath, "rb") as f:
-        upload_response = client_gemini.files.upload(
-            file=f,
-            config={'mime_type': 'audio/mp3', 'display_name': 'Audio Viral Analysis'}
-        )
-    
-    logger.info(f"Subido con ID: {upload_response.name}. Esperando procesamiento...")
-
-    while True:
-        file_meta = client_gemini.files.get(name=upload_response.name)
-        if file_meta.state == "ACTIVE":
-            break
-        elif file_meta.state == "FAILED":
-            raise ValueError("Fallo al procesar audio en Google AI")
-        time.sleep(2)
+        with open("temp_audio.mp3", "rb") as f:
+            upload_response = client_gemini.files.upload(
+                file=f,
+                config={'mime_type': 'audio/mp3', 'display_name': 'Audio Viral Analysis'}
+            )
         
-    return upload_response
+        logger.info(f"Subido con ID: {upload_response.name}. Esperando procesamiento...")
+
+        while True:
+            file_meta = client_gemini.files.get(name=upload_response.name)
+            if file_meta.state == "ACTIVE":
+                break
+            elif file_meta.state == "FAILED":
+                raise ValueError("Fallo al procesar audio en Google AI")
+            time.sleep(2)
+            
+        return upload_response
+        
+    except Exception as e:
+        logger.error(f"❌ Error en descarga/análisis: {e}")
+        return None
 
 def analyze_transcript_for_clipper(audio_file_obj):
     """Usa Gemini 1.5 Flash para encontrar el clip viral escuchando el audio"""
@@ -354,15 +315,15 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIIP v2.5 (Cobalt API)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIIP v2.6 (yt-dlp Headers)'...")
     
     # 1. Buscar
     video_data = search_trending_video()
     if not video_data:
         return 
 
-    # 2. Descargar y subir audio (Nuevo: Cobalt API)
-    audio_file = download_audio_cobalt(video_data['url'])
+    # 2. Descargar y subir audio (Nuevo: yt-dlp + headers)
+    audio_file = download_audio_and_transcribe(video_data['url'])
     if not audio_file:
          return
 
