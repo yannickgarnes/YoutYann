@@ -9,7 +9,9 @@ import logging
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
-import google.generativeai as genai
+# IMPORTANTE: Nueva librería cliente oficial de Google GenAI (v1.0+)
+from google import genai
+from google.genai import types
 from datetime import datetime, timedelta
 
 # --- CONFIGURACIÓN DE LOGGER ---
@@ -27,20 +29,23 @@ YOUTUBE_TOKEN_JSON = os.environ.get("YOUTUBE_TOKEN_JSON")
 CHANNELS_TO_WATCH = ["Ibai Llanos", "TheGrefg", "ElRubius", "AuronPlay", "IlloJuan"]
 
 # Inicializar clientes (GLOBALMENTE)
-youtube = None # Definir variable global primero
-model = None
+youtube = None 
+client_gemini = None # Cliente GenAI nuevo
 
 try:
     if YOUTUBE_API_KEY:
         youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
     else:
-        logger.error("❌ FALTA LA API KEY DE YOUTUBE: Revisa los secretos de GitHub.")
+        logger.error("❌ FALTA LA API KEY DE YOUTUBE en GitHub Secrets.")
     
     if GEMINI_API_KEY:
-        genai.configure(api_key=GEMINI_API_KEY)
-        model = genai.GenerativeModel('gemini-1.5-flash') 
+        # Nueva sintaxis para la librería google-genai v1.0
+        client_gemini = genai.Client(api_key=GEMINI_API_KEY)
     else:
-         logger.error("❌ FALTA LA API KEY DE GEMINI.")
+         logger.error("❌ FALTA LA API KEY DE GEMINI en GitHub Secrets.")
+    
+    if not CREATOMATE_API_KEY:
+        logger.warning("⚠️ OJO: No veo la API Key de Creatomate. El renderizado fallará.")
 
 except Exception as e:
     logger.error(f"Error grave al iniciar clientes: {e}")
@@ -49,7 +54,7 @@ except Exception as e:
 def search_trending_video():
     """Busca el video más reciente y viral de los canales top"""
     if not youtube:
-        logger.error("❌ No puedo buscar videos porque el cliente de YouTube no se ha iniciado.")
+        logger.error("❌ No puedo buscar videos porque falta YOUTUBE_API_KEY.")
         return None
 
     yesterday = (datetime.utcnow() - timedelta(days=1)).isoformat("T") + "Z"
@@ -90,7 +95,7 @@ def search_trending_video():
 
 def download_audio_and_transcribe(video_url):
     """
-    Descarga el audio y lo sube a Gemini para que lo escuche.
+    Descarga el audio y lo sube via File API (válido para Gemini y GenAI SDK).
     """
     logger.info("⬇️ Descargando audio del video...")
     
@@ -106,27 +111,37 @@ def download_audio_and_transcribe(video_url):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
             
-        logger.info("🧠 Subiendo audio a Gemini para análisis directo...")
+        logger.info("🧠 Subiendo audio a Google GenAI para análisis...")
         
-        if not model:
-             raise ValueError("Cliente Gemini no iniciado")
+        if not client_gemini:
+             raise ValueError("Cliente Gemini no iniciado (Falta API Key)")
 
-        audio_file = genai.upload_file(path="temp_audio.mp3")
+        # Subida con la nueva librería
+        # Ojo: la librería nueva puede pedir 'mime_type' explícito
+        with open("temp_audio.mp3", "rb") as f:
+            upload_response = client_gemini.files.upload(
+                file=f,
+                config={'mime_type': 'audio/mp3', 'display_name': 'Audio Viral Analysis'}
+            )
         
-        while audio_file.state.name == "PROCESSING":
+        logger.info(f"Subido con ID: {upload_response.name}. Esperando procesamiento...")
+
+        # Esperar estado ACTIVE
+        while True:
+            file_meta = client_gemini.files.get(name=upload_response.name)
+            if file_meta.state == "ACTIVE":
+                break
+            elif file_meta.state == "FAILED":
+                raise ValueError("Fallo al procesar audio en Google AI")
             time.sleep(2)
-            audio_file = genai.get_file(audio_file.name)
-
-        if audio_file.state.name == "FAILED":
-            raise ValueError("Fallo al procesar audio en Gemini")
             
-        return audio_file
+        return upload_response
         
     except Exception as e:
         logger.error(f"❌ Error en descarga/análisis: {e}")
         return None
 
-def analyze_transcript_for_clipper(audio_file_gemini):
+def analyze_transcript_for_clipper(audio_file_obj):
     """Usa Gemini 1.5 Flash para encontrar el clip viral escuchando el audio"""
     logger.info("🧠 Gemini está escuchando el audio para encontrar el clip...")
     
@@ -149,12 +164,26 @@ def analyze_transcript_for_clipper(audio_file_gemini):
     """
     
     try:
-        if not model:
+        if not client_gemini:
             raise ValueError("Modelo Gemini no iniciado")
 
-        response = model.generate_content(
-            [prompt, audio_file_gemini],
-            generation_config={"response_mime_type": "application/json"}
+        response = client_gemini.models.generate_content(
+            model='gemini-1.5-flash',
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_text(text=prompt),
+                        types.Part.from_uri(
+                            file_uri=audio_file_obj.uri,
+                            mime_type=audio_file_obj.mime_type
+                        )
+                    ]
+                )
+            ],
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json"
+            )
         )
         
         result = json.loads(response.text)
@@ -162,8 +191,8 @@ def analyze_transcript_for_clipper(audio_file_gemini):
         
         # Limpieza
         try:
-            genai.delete_file(audio_file_gemini.name)
-            os.remove("temp_audio.mp3") 
+             client_gemini.files.delete(name=audio_file_obj.name)
+             os.remove("temp_audio.mp3") 
         except:
             pass
 
@@ -174,7 +203,7 @@ def analyze_transcript_for_clipper(audio_file_gemini):
         return None
 
 def render_viral_video(video_id, analysis):
-    """Manda a renderizar a Creatomate usando la plantilla correcta (Auto-Captions)"""
+    """Manda a renderizar a Creatomate"""
     logger.info("🎨 Renderizando video con subtítulos dinámicos en Creatomate...")
     
     url = "https://api.creatomate.com/v1/renders"
@@ -195,6 +224,10 @@ def render_viral_video(video_id, analysis):
         "modifications": modifications
     }
     
+    if not CREATOMATE_API_KEY:
+        logger.error("❌ FALTA CREATOMATE_API_KEY. No puedo renderizar.")
+        return None
+
     try:
         response = requests.post(url, headers=headers, json=payload)
         response.raise_for_status() 
@@ -223,7 +256,7 @@ def render_viral_video(video_id, analysis):
     except Exception as e:
         logger.error(f"❌ Error conectando con Creatomate: {e}")
         if response.status_code == 400:
-            logger.error("⚠️ Consejo: Revisa que el ID de la plantilla sea correcto y acepte 'Video' como modificación.")
+            logger.error("⚠️ Consejo: Revisa que el ID de la plantilla sea correcto.")
         return None
 
 def upload_to_youtube_shorts(video_url, title, description):
@@ -235,12 +268,12 @@ def upload_to_youtube_shorts(video_url, title, description):
         return
 
     try:
-        # Descargar video
         r = requests.get(video_url)
         with open("final_short.mp4", "wb") as f:
             f.write(r.content)
 
         token_data = json.loads(YOUTUBE_TOKEN_JSON)
+        # Importante: refrescar token si ha caducado (Google Auth lo hace solo si tiene refresh token)
         creds = Credentials.from_authorized_user_info(token_data, ['https://www.googleapis.com/auth/youtube.upload'])
         
         service = build('youtube', 'v3', credentials=creds)
@@ -275,30 +308,26 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIIP v2.2 (Bug Fix)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIIP v2.3 (GenAI Upgrade)'...")
     
     # 1. Buscar
     video_data = search_trending_video()
     if not video_data:
-        logger.error("❌ No se pudo completar la búsqueda de videos.")
-        return
+        return # Ya hay log de error dentro
 
-    # 2. Descargar y subir audio a Gemini
+    # 2. Descargar y subir audio (Nuevo cliente GenAI)
     audio_file = download_audio_and_transcribe(video_data['url'])
     if not audio_file:
-         logger.error("❌ Fallo en la descarga o subida del audio.")
          return
 
-    # 3. Analizar con Gemini Flash
+    # 3. Analizar
     analysis = analyze_transcript_for_clipper(audio_file)
     if not analysis:
-         logger.error("❌ Fallo en el análisis de Gemini.")
          return
 
     # 4. Renderizar
     final_video_url = render_viral_video(video_data['id'], analysis)
     if not final_video_url:
-         logger.error("❌ Fallo en el renderizado con Creatomate.")
          return
 
     # 5. Subir
