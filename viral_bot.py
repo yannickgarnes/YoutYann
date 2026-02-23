@@ -133,8 +133,9 @@ def search_trending_video():
             logger.warning("⚠️ No se encontraron videos virales nuevos.")
             return None
         
-        # Elegimos el primero (el más visto)
-        video = response['items'][0]
+        # v8.0: Elegimos uno al azar de los top 5 para evitar repetir siempre el mismo
+        import random
+        video = random.choice(response['items'])
         video_title = video['snippet']['title']
         video_id = video['id']['videoId']
         
@@ -293,35 +294,77 @@ def analyze_video_for_clipper(video_data):
     return None
 
 def render_viral_video(video_id, analysis):
-    """Manda a renderizar a Creatomate"""
-    logger.info("🎨 Renderizando video con subtítulos dinámicos en Creatomate...")
+    """
+    v8.0: PURE JSON SOURCE ENGINE (Bypass Templates)
+    Crea un diseño profesional vertical con auto-zoom y subtítulos dinámicos.
+    """
+    logger.info("🎨 Renderizando video con el Motor 'Pure JSON' (Estilo Vizard)...")
     
     url = "https://api.creatomate.com/v1/renders"
     headers = {
         "Authorization": f"Bearer {CREATOMATE_API_KEY}",
         "Content-Type": "application/json"
     }
-    
-    modifications = {
-        "Video": f"https://www.youtube.com/watch?v={video_id}", 
-        "Video.trim_start": analysis['start_time'],
-        "Video.duration": min(analysis['end_time'] - analysis['start_time'], 58),
-        "Video.fit": "cover", # v7.1: Auto-reframing (Vizard style)
-        "Text": analysis['viral_title'], 
-        "Text.style": "subtitle" # v7.1: Activa subtítulos dinámicos si la plantilla lo soporta
+
+    # Definimos la composición profesional desde cero
+    source = {
+        "output_format": "mp4",
+        "width": 1080,
+        "height": 1920,
+        "frame_rate": 30,
+        "elements": [
+            {
+                # Elemento 1: El Video original con Auto-Zoom (Vizard Style)
+                "type": "video",
+                "track": 1,
+                "source": f"https://www.youtube.com/watch?v={video_id}",
+                "time": 0,
+                "duration": min(analysis['end_time'] - analysis['start_time'], 58),
+                "trim_start": analysis['start_time'],
+                "fit": "cover", # Esto hace el zoom vertical para que no se vea como "fotos"
+                "x_alignment": "50%",
+                "y_alignment": "50%"
+            },
+            {
+                # Elemento 2: Subtítulos dinámicos automáticos (Word-by-word)
+                "type": "text",
+                "track": 2,
+                "transcript_source": "video-1", # Referencia al audio del elemento anterior
+                "time": 0,
+                "duration": "video-1.duration",
+                "y": "80%", # Posición en la parte inferior
+                "width": "90%",
+                "height": "15%",
+                "text_alignment": "center",
+                "font_family": "Montserrat",
+                "font_weight": "900",
+                "font_size": "75 px",
+                "text_transform": "uppercase",
+                "color": "#ffff00", # Amarillo Vizard
+                "stroke_color": "#000000",
+                "stroke_width": "3 px",
+                "background_color": "rgba(0,0,0,0.4)",
+                "padding": "20 px",
+                "animations": [
+                    {
+                        "type": "text-appearance",
+                        "scope": "word", # Aparece palabra por palabra
+                        "duration": "0.1 s"
+                    }
+                ]
+            }
+        ]
     }
     
+    # Asignamos IDs para las referencias de transcript
+    source["elements"][0]["id"] = "video-1"
+
     payload = {
-        "template_id": CREATOMATE_TEMPLATE_ID,
-        "modifications": modifications,
-        "output_format": "mp4",
-        "frame_rate": 30,
-        "width": 1080,
-        "height": 1920
+        "source": source
     }
     
     if not CREATOMATE_API_KEY:
-        logger.error("❌ FALTA CREATOMATE_API_KEY. No puedo renderizar.")
+        logger.error("❌ FALTA CREATOMATE_API_KEY.")
         return None
 
     try:
@@ -329,31 +372,14 @@ def render_viral_video(video_id, analysis):
         
         if response.status_code not in [200, 202]:
             logger.error(f"❌ Error de Creatomate ({response.status_code}): {response.text}")
-            # v6.6: Gatillo de descubrimiento más permisivo
-            error_text = response.text.lower()
-            if "template" in error_text and ("found" in error_text or "not" in error_text):
-                logger.info("🔍 Buscando automáticamente plantillas en tu cuenta de Creatomate...")
-                try:
-                    tpl_url = "https://api.creatomate.com/v1/templates"
-                    tpl_res = requests.get(tpl_url, headers={"Authorization": f"Bearer {CREATOMATE_API_KEY}"})
-                    if tpl_res.status_code == 200:
-                        templates = tpl_res.json()
-                        logger.info("📋 Tienes estas plantillas disponibles:")
-                        for t in templates:
-                            logger.info(f"   - 👋 '{t['name']}' -> ID: {t['id']}")
-                        logger.error("🛑 CONFIGURACIÓN REQUERIDA: Copia un ID de arriba y ponlo en 'CREATOMATE_TEMPLATE_ID' en GitHub Secrets.")
-                    else:
-                        logger.warning("No se pudo obtener la lista de plantillas.")
-                except Exception as ex:
-                    logger.warning(f"Error en el auto-descubrimiento: {ex}")
             return None
 
         render_data = response.json()
         render_id = render_data[0]['id']
-        logger.info(f"⏳ Procesando render ({render_id})... Esperando resultado...")
+        logger.info(f"⏳ Procesando render ({render_id})...")
         
         attempts = 0
-        while attempts < 60: 
+        while attempts < 120: # 10 mins max
             time.sleep(5)
             status_res = requests.get(f"{url}/{render_id}", headers=headers).json()
             status = status_res['status']
@@ -366,13 +392,9 @@ def render_viral_video(video_id, analysis):
                 logger.error(f"❌ Render falló: {status_res.get('errorMessage')}")
                 return None
             attempts += 1
-            
         return None
-
     except Exception as e:
-        logger.error(f"❌ Error conectando con Creatomate: {e}")
-        if response.status_code == 400:
-            logger.error("⚠️ Consejo: Revisa que el ID de la plantilla sea correcto.")
+        logger.error(f"❌ Error en Creatomate Engine: {e}")
         return None
 
 def upload_to_youtube_shorts(video_url, title, description):
@@ -421,7 +443,7 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v7.1 (VIZARD STYLE)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v8.0 (PURE AI ENGINE)'...")
     
     # 1. Buscar video viral
     video_data = search_trending_video()
