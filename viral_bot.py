@@ -318,8 +318,15 @@ def render_viral_video(video_id, analysis):
 
     try:
         response = requests.post(url, headers=headers, json=payload)
-        response.raise_for_status() 
         
+        if response.status_code != 200:
+            logger.error(f"❌ Error de Creatomate ({response.status_code}): {response.text}")
+            if "not found" in response.text.lower():
+                logger.error("⚠️ El Template ID no existe en tu cuenta de Creatomate.")
+            elif "modifications" in response.text.lower():
+                logger.error("⚠️ Los nombres de los elementos (Video, Text) no coinciden con tu plantilla.")
+            return None
+
         render_data = response.json()
         render_id = render_data[0]['id']
         logger.info(f"⏳ Procesando render ({render_id})... Esperando resultado...")
