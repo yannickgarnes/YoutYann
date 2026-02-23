@@ -393,7 +393,7 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v6.1 (ULTRA-CLEAN)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v6.2 (AUTO-DISCOVERY)'...")
     
     # 1. Buscar video viral
     video_data = search_trending_video()
