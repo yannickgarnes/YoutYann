@@ -14,27 +14,14 @@ jobs:
       - name: Checkout del código
         uses: actions/checkout@v3
 
-      - name: Configurar Node.js (Para evitar n-challenge)
-        uses: actions/setup-node@v3
-        with:
-          node-version: "20"
-
       - name: Configurar Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.11"
 
-      - name: Instalar FFmpeg
-        run: |
-          sudo apt-get update
-          sudo apt-get install ffmpeg
-
       - name: Instalar librerías
         run: |
-          pip install -U yt-dlp
           pip install -r requirements.txt
-          # Instalar solver de JS sugerido por Claude
-          sudo npm install -g n-m3u8dl-re 2>/dev/null || true
 
       - name: Debug Variables (Oculto)
         run: |
@@ -43,31 +30,7 @@ jobs:
         env:
           YOUTUBE_API_KEY: "${{ secrets.YOUTUBE_API_KEY }}"
 
-      - name: Setup YouTube cookies
-        run: |
-          if [ -n "${{ secrets.YOUTUBE_COOKIES }}" ]; then
-            # Intentar decodificar Base64 primero, si falla tratar como texto plano
-            if echo "${{ secrets.YOUTUBE_COOKIES }}" | base64 -d > cookies.txt 2>/dev/null; then
-              echo "✅ cookies.txt restaurado desde Base64."
-            else
-              echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
-              echo "✅ cookies.txt restaurado desde Texto Plano."
-            fi
-            echo "Diagnóstico (Tamaño): $(stat -c%s cookies.txt) bytes"
-          else
-            echo "⚠️ No hay cookies en los Secrets."
-          fi
-
-      - name: TEST DIRECTO YT-DLP
-        run: |
-          echo "Probando descarga con estrategia v4.1 (MWEB)..."
-          yt-dlp "https://www.youtube.com/watch?v=Y3diMf0k_XE" \
-            --extractor-args "youtube:player_client=mweb" \
-            --cookies cookies.txt \
-            --no-playlist \
-            --get-title || echo "❌ Falló el test directo"
-
-      - name: EJECUTAR BOT VIRAL
+      - name: EJECUTAR BOT VIRAL (v5.0 API ONLY)
         env:
           YOUTUBE_API_KEY: "${{ secrets.YOUTUBE_API_KEY }}"
           GEMINI_API_KEY: "${{ secrets.GEMINI_API_KEY }}"

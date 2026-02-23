@@ -2,7 +2,6 @@ import os
 import json
 import time
 import requests
-import yt_dlp
 import sys
 import logging
 from pathlib import Path
@@ -153,130 +152,113 @@ def search_trending_video():
         logger.error(f"❌ Error buscando en YouTube: {e}")
         return None
 
-def download_audio_and_transcribe(video_url):
+def get_transcript_via_api(video_id):
     """
-    Descarga el audio usando yt-dlp con estrategia v4.1 (Resilience).
+    Obtiene el transcript del video usando la YouTube Data API oficial.
+    No requiere descarga ni cookies.
     """
-    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v4.1 (RESILIENCE)'...")
-    
-    cookies_path = Path(__file__).resolve().parent / "cookies.txt"
-    
-    ydl_opts = {
-        'format': 'ba/b',
-        'postprocessors': [{
-            'key': 'FFmpegExtractAudio',
-            'preferredcodec': 'mp3',
-            'preferredquality': '128',
-        }],
-        'outtmpl': 'temp_audio.%(ext)s',
-        'quiet': False,
-        'no_warnings': False,
-        'nocheckcertificate': True,
-        'ignoreerrors': False,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['mweb', 'ios', 'web'], # mweb es actualmente el más permisivo
-                'player_skip': ['webpage', 'configs'],
-            }
-        },
-        # User-Agent de móvil para coincidir con el cliente mweb/ios
-        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'
-    }
-    
-    if cookies_path.exists() and cookies_path.stat().st_size > 10:
-        logger.info(f"🍪 Conectando con cookies ({cookies_path.stat().st_size} bytes)...")
-        ydl_opts['cookiefile'] = str(cookies_path)
-    else:
-        logger.warning("⚠️ No se detectaron cookies válidas. El bloqueo es inminente.")
+    logger.info("📝 Intentando obtener transcript oficial de YouTube...")
     
     try:
-        # Limpieza
-        for f in Path(".").glob("temp_audio.*"):
-            try: f.unlink()
-            except: pass
+        # Obtener captions disponibles
+        captions_response = youtube.captions().list(
+            part="snippet",
+            videoId=video_id
+        ).execute()
         
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([video_url])
+        items = captions_response.get('items', [])
+        if not items:
+            logger.warning("⚠️ No hay captions disponibles. Usando título/descripción como contexto.")
+            return None
             
-        # Verificar archivo
-        if not Path("temp_audio.mp3").exists():
-            for f in Path(".").glob("temp_audio.*"):
-                if f.suffix != ".mp3":
-                    f.rename("temp_audio.mp3")
-                    break
-            
-        if not Path("temp_audio.mp3").exists():
-            raise ValueError("Acceso denegado (Sign in to confirm you're not a bot)")
-
-        logger.info("🧠 Audio descargado. Procesando con Gemini...")
-        
-        if not client_gemini:
-            raise ValueError("Gemini API no configurada")
-
-        upload_response = genai.upload_file("temp_audio.mp3", mime_type="audio/mp3")
-        return upload_response
-        
-    except Exception as e:
-        logger.error(f"❌ Error en v4.1: {e}")
-        return None
-
-        while True:
-            file_meta = genai.get_file(upload_response.name)
-            if file_meta.state.name == "ACTIVE":
+        # Buscar caption en español o el primero disponible
+        caption_id = None
+        for item in items:
+            lang = item['snippet']['language']
+            if lang.startswith('es'):
+                caption_id = item['id']
                 break
-            elif file_meta.state.name == "FAILED":
-                raise ValueError("Fallo al procesar audio en Google AI")
-            time.sleep(2)
-            
-        return upload_response
+        if not caption_id:
+            caption_id = items[0]['id']
+        
+        logger.info(f"✅ Caption encontrado (ID: {caption_id})")
+        return caption_id
         
     except Exception as e:
-        logger.error(f"❌ Error en descarga/análisis: {e}")
+        logger.error(f"❌ Error obteniendo transcript: {e}")
         return None
 
-def analyze_transcript_for_clipper(audio_file_obj):
-    """Usa Gemini 1.5 Flash para encontrar el clip viral escuchando el audio"""
-    logger.info("🧠 Gemini está escuchando el audio para encontrar el clip...")
+def get_video_details(video_id):
+    """Obtiene título, descripción y duración del video para el análisis."""
+    try:
+        response = youtube.videos().list(
+            part="snippet,contentDetails,statistics",
+            id=video_id
+        ).execute()
+        
+        if not response.get('items'):
+            return None
+            
+        item = response['items'][0]
+        return {
+            'title': item['snippet']['title'],
+            'description': item['snippet']['description'][:2000],
+            'duration': item['contentDetails']['duration'],
+            'views': item['statistics'].get('viewCount', '0'),
+            'likes': item['statistics'].get('likeCount', '0'),
+        }
+    except Exception as e:
+        logger.error(f"❌ Error obteniendo detalles: {e}")
+        return None
+
+def analyze_video_for_clipper(video_data):
+    """
+    Usa Gemini para inferir el mejor clip basándose en
+    título, descripción y estadísticas. Sin audio necesario (v5.0).
+    """
+    logger.info("🧠 Gemini analizando metadatos del video...")
     
-    prompt = """
-    Actúa como un editor experto de videos virales para TikTok.
-    Escucha este audio atentamente. Tu misión es identificar el segmento MÁS DIVERTIDO, IMPACTANTE O VIRAL.
+    details = get_video_details(video_data['id'])
+    if not details:
+        return None
     
-    Reglas:
-    1. Duración: Entre 30 y 50 segundos.
-    2. Debe tener un inicio claro (gancho) y un final coherente.
-    3. Retorna la respuesta EXCLUSIVAMENTE en formato JSON.
+    prompt = f"""
+    Actúa como un editor experto de videos virales para TikTok/YouTube Shorts.
     
-    Formato JSON esperado:
-    {
-        "start_time": (número en segundos, ej: 120.5),
-        "end_time": (número en segundos, ej: 165.2),
-        "viral_title": (título clickbait corto con emojis),
-        "summary": (breve explicación de por qué es viral)
-    }
+    Tienes este video de YouTube:
+    - Título: {details['title']}
+    - Canal: {video_data['channel']}
+    - Vistas: {details['views']}
+    - Likes: {details['likes']}
+    - Duración ISO: {details['duration']}
+    - Descripción: {details['description']}
+    
+    Basándote en el título y la descripción, infiere qué momento del video 
+    sería el MÁS VIRAL para hacer un clip de 30-50 segundos.
+    
+    Responde EXCLUSIVAMENTE en JSON:
+    {{
+        "start_time": (número en segundos, inicio estimado del momento más viral),
+        "end_time": (número en segundos, fin del clip),
+        "viral_title": (título clickbait corto con emojis para Shorts),
+        "summary": (por qué este momento sería viral)
+    }}
     """
     
     try:
         if not client_gemini:
-            raise ValueError("Modelo Gemini no iniciado")
+            raise ValueError("Gemini no configurado")
 
         model = genai.GenerativeModel('gemini-1.5-flash')
         response = model.generate_content(
-            [prompt, audio_file_obj],
+            prompt,
             generation_config=genai.GenerationConfig(
                 response_mime_type="application/json"
             )
         )
         
         result = json.loads(response.text)
-        logger.info(f"💡 Clip detectado: '{result['viral_title']}' ({result['start_time']}s - {result['end_time']}s)")
-        
-        try:
-             genai.delete_file(audio_file_obj.name)
-             os.remove("temp_audio.mp3") 
-        except Exception as del_e:
-            logger.warning(f"No se pudo limpiar el archivo temporal: {del_e}")
-
+        logger.info(f"💡 Clip inferido: '{result['viral_title']}' ({result['start_time']}s - {result['end_time']}s)")
         return result
         
     except Exception as e:
@@ -386,29 +368,24 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v3.9 (CLAUDE STRATEGY)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v5.0 (API ONLY)'...")
     
-    # 1. Buscar
+    # 1. Buscar video viral
     video_data = search_trending_video()
     if not video_data:
-        return 
+        return
 
-    # 2. Descargar y subir audio (Nuevo: yt-dlp + headers)
-    audio_file = download_audio_and_transcribe(video_data['url'])
-    if not audio_file:
-         return
-
-    # 3. Analizar
-    analysis = analyze_transcript_for_clipper(audio_file)
+    # 2. Analizar con Gemini (SIN descarga, usando metadatos)
+    analysis = analyze_video_for_clipper(video_data)
     if not analysis:
-         return
+        return
 
-    # 4. Renderizar
+    # 3. Renderizar con Creatomate (Offloading clipping a la nube)
     final_video_url = render_viral_video(video_data['id'], analysis)
     if not final_video_url:
-         return
+        return
 
-    # 5. Subir
+    # 4. Subir a YouTube Shorts
     full_description = f"{analysis['viral_title']}\n\n#shorts #viral #clips\n\nCréditos: {video_data['channel']}"
     upload_to_youtube_shorts(final_video_url, analysis['viral_title'], full_description)
 
