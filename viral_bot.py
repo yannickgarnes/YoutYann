@@ -319,9 +319,9 @@ def render_viral_video(video_id, analysis):
     try:
         response = requests.post(url, headers=headers, json=payload)
         
-        if response.status_code != 200:
+        if response.status_code not in [200, 202]:
             logger.error(f"❌ Error de Creatomate ({response.status_code}): {response.text}")
-            # v6.5: Gatillo de descubrimiento más permisivo
+            # v6.6: Gatillo de descubrimiento más permisivo
             error_text = response.text.lower()
             if "template" in error_text and ("found" in error_text or "not" in error_text):
                 logger.info("🔍 Buscando automáticamente plantillas en tu cuenta de Creatomate...")
@@ -413,7 +413,7 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v6.5 (THE FINAL ANSWER)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v6.6 (THE FINAL-FINAL ANSWER)'...")
     
     # 1. Buscar video viral
     video_data = search_trending_video()
