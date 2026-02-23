@@ -296,6 +296,27 @@ def analyze_video_for_clipper(video_data):
     logger.error(f"❌ MISIÓN FALLIDA: Ningún modelo Gemini funcionó. Último error: {last_error}")
     return None
 
+def get_direct_video_url(youtube_url):
+    """
+    v10.0: Usa yt-dlp para extraer un enlace directo al video (MP4/m3u8).
+    Esto evita que Creatomate falle al procesar el proxy de YouTube.
+    """
+    logger.info(f"🔗 Extrayendo URL directa de: {youtube_url}...")
+    try:
+        import yt_dlp
+        ydl_opts = {
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'quiet': True,
+            'no_warnings': True,
+            'force_generic_extractor': False
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(youtube_url, download=False)
+            return info.get('url')
+    except Exception as e:
+        logger.warning(f"⚠️ No se pudo extraer URL directa con yt-dlp: {e}")
+        return youtube_url # Fallback a la original
+
 def render_viral_video(video_id, analysis):
     """
     v9.0: BULLETPROOF RENDER ENGINE
@@ -309,12 +330,15 @@ def render_viral_video(video_id, analysis):
         "Content-Type": "application/json"
     }
 
+    # v10.0: Extraer URL directa para máxima fiabilidad
+    direct_url = get_direct_video_url(f"https://www.youtube.com/watch?v={video_id}")
+
     def create_payload(with_subtitles=True):
         elements = [
             {
                 "id": "video-base",
                 "type": "video",
-                "source": f"https://www.youtube.com/watch?v={video_id}",
+                "source": direct_url,
                 "trim_start": float(analysis['start_time']),
                 "duration": float(min(analysis['end_time'] - analysis['start_time'], 58)),
                 "width": 1080,
@@ -442,7 +466,7 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v9.0 (FINAL BULLETPROOF)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v10.0 (DIRECT STREAM ENGINE)'...")
     
     # 1. Buscar video viral
     video_data = search_trending_video()
