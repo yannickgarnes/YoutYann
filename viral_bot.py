@@ -8,7 +8,7 @@ from pathlib import Path
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
-import google.generativeai as genai
+from google import genai
 from datetime import datetime, timedelta
 
 # --- CONFIGURACIÓN DE LOGGER ---
@@ -40,9 +40,8 @@ try:
         logger.error("❌ FALTA LA API KEY DE YOUTUBE.")
     
     if GEMINI_API_KEY:
-        genai.configure(api_key=GEMINI_API_KEY)
-        client_gemini = True
-        logger.info("✅ Gemini Client OK (Key Hardcoded/Env)")
+        client_gemini = genai.Client(api_key=GEMINI_API_KEY)
+        logger.info("✅ Gemini Client OK (Modern google-genai SDK)")
     else:
          logger.error("❌ FALTA LA API KEY DE GEMINI.")
 
@@ -245,24 +244,22 @@ def analyze_video_for_clipper(video_data):
     }}
     """
     
-    # Lista de modelos a probar (v5.2: Call-time Fallback)
+    # Lista de modelos a probar (v6.0: Modern SDK Fallback)
     model_names = [
         'gemini-1.5-flash', 
-        'gemini-1.5-flash-latest', 
+        'gemini-2.0-flash-001',
         'gemini-2.0-flash-exp',
-        'gemini-pro'
+        'gemini-1.5-pro'
     ]
     
     last_error = None
     for name in model_names:
         try:
-            logger.info(f"Trying Gemini model: {name}...")
-            model = genai.GenerativeModel(name)
-            response = model.generate_content(
-                prompt,
-                generation_config=genai.GenerationConfig(
-                    response_mime_type="application/json"
-                )
+            logger.info(f"Probando Gemini (SDK Moderno): {name}...")
+            response = client_gemini.models.generate_content(
+                model=name,
+                contents=prompt,
+                config={'response_mime_type': 'application/json'}
             )
             
             result = json.loads(response.text)
@@ -276,13 +273,7 @@ def analyze_video_for_clipper(video_data):
             continue
             
     # Si llegamos aquí, todos fallaron
-    logger.error(f"❌ Todos los modelos Gemini fallaron. Último error: {last_error}")
-    
-    # Diagnóstico extra: Listar modelos disponibles
-    try:
-        available = [m.name for m in genai.list_models()]
-        logger.info(f"Modelos disponibles en este entorno: {available}")
-    except: pass
+    logger.error(f"❌ Todos los modelos fallaron en el SDK moderno. Último error: {last_error}")
     
     return None
 
