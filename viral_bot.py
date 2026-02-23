@@ -318,6 +318,7 @@ def render_viral_video(video_id, analysis):
             {
                 "id": "main_video",
                 "type": "video",
+                "track": 1, # Track 1: Fondo
                 "source": f"https://www.youtube.com/watch?v={video_id}",
                 "trim_start": float(analysis['start_time']),
                 "duration": float(min(analysis['end_time'] - analysis['start_time'], 58)),
@@ -328,12 +329,14 @@ def render_viral_video(video_id, analysis):
             },
             {
                 "type": "text",
+                "track": 2, # Track 2: Superpuesto
+                "text": "[transcript]", # v8.3: REQUERIDO para activar el motor de subtítulos
                 "transcript_source": "main_video",
                 "width": "90%",
                 "height": "25%",
                 "y": "78%",
                 "text_alignment": "center",
-                "font_family": "open-sans",
+                "font_family": "Arial", # v8.3: Fuente ultra-compatible
                 "font_weight": "900",
                 "font_size": "85 px",
                 "text_transform": "uppercase",
@@ -433,7 +436,7 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v8.2 (ULTRA ENGINE)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v8.3 (THE VIZARD ENGINE)'...")
     
     # 1. Buscar video viral
     video_data = search_trending_video()
