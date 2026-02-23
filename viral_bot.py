@@ -230,9 +230,9 @@ def analyze_video_for_clipper(video_data):
     - Duración ISO: {details['duration']}
     - Descripción: {details['description']}
     
-    Basándote en el título y la descripción, infiere qué momento del video 
     sería el MÁS VIRAL para un Short de 15-58 segundos. 
     Busca un "HOOK" (gancho) potente para que el video empiece con mucha energía.
+    El título debe ser corto y llamativo para los subtítulos dinámicos.
     
     Responde EXCLUSIVAMENTE en JSON:
     {{
@@ -305,8 +305,10 @@ def render_viral_video(video_id, analysis):
     modifications = {
         "Video": f"https://www.youtube.com/watch?v={video_id}", 
         "Video.trim_start": analysis['start_time'],
-        "Video.duration": analysis['end_time'] - analysis['start_time'],
+        "Video.duration": min(analysis['end_time'] - analysis['start_time'], 58),
+        "Video.fit": "cover", # v7.1: Auto-reframing (Vizard style)
         "Text": analysis['viral_title'], 
+        "Text.style": "subtitle" # v7.1: Activa subtítulos dinámicos si la plantilla lo soporta
     }
     
     payload = {
@@ -419,7 +421,7 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v6.6 (THE FINAL-FINAL ANSWER)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v7.1 (VIZARD STYLE)'...")
     
     # 1. Buscar video viral
     video_data = search_trending_video()
