@@ -159,7 +159,7 @@ def download_audio_and_transcribe(video_url):
     """
     logger.info("⬇️ Descargando audio del video...")
     
-    # Configuración de Bypass Maestro (v3.6: The Hybrid Strategy)
+    # Configuración de Bypass Maestro (v3.7: The Claude Special)
     ydl_opts = {
         'format': 'bestaudio/best', 
         'postprocessors': [{
@@ -174,7 +174,7 @@ def download_audio_and_transcribe(video_url):
         'ignoreerrors': False,
         'extractor_args': {
             'youtube': {
-                'player_client': ['ios', 'web'], # Estos SI soportan cookies (android no)
+                'player_client': ['tv_embedded', 'web'], # Basado en sugerencia de Claude para máximo bypass
             }
         },
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
@@ -382,7 +382,7 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v3.6 (HYBRID STRATEGY)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v3.7 (CLAUDE SPECIAL)'...")
     
     # 1. Buscar
     video_data = search_trending_video()

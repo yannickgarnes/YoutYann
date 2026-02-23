@@ -26,6 +26,7 @@ jobs:
 
       - name: Instalar librerías
         run: |
+          pip install -U yt-dlp
           pip install -r requirements.txt
 
       - name: Debug Variables (Oculto)
@@ -39,7 +40,10 @@ jobs:
         run: |
           if [ -n "${{ secrets.YOUTUBE_COOKIES }}" ]; then
             echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
-            echo "✅ cookies.txt creado."
+            echo "✅ cookies.txt creado. Verificando formato..."
+            head -n 3 cookies.txt
+            echo "Líneas totales: "
+            wc -l < cookies.txt
           else
             echo "⚠️ No hay cookies en los Secrets. Se intentará usar modo normal/OAuth."
           fi
