@@ -14,10 +14,15 @@ jobs:
       - name: Checkout del código
         uses: actions/checkout@v3
 
+      - name: Configurar Node.js (Para evitar n-challenge)
+        uses: actions/setup-node@v3
+        with:
+          node-version: "20"
+
       - name: Configurar Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.11" # Actualizado a 3.11 para evitar advertencias
+          python-version: "3.11"
 
       - name: Instalar FFmpeg
         run: |
@@ -28,6 +33,8 @@ jobs:
         run: |
           pip install -U yt-dlp
           pip install -r requirements.txt
+          # Instalar solver de JS sugerido por Claude
+          sudo npm install -g n-m3u8dl-re 2>/dev/null || true
 
       - name: Debug Variables (Oculto)
         run: |
@@ -42,11 +49,21 @@ jobs:
             echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
             echo "✅ cookies.txt creado. Verificando formato..."
             head -n 3 cookies.txt
-            echo "Líneas totales: "
-            wc -l < cookies.txt
+            echo "Tamaño del archivo: $(stat -c%s cookies.txt) bytes"
           else
             echo "⚠️ No hay cookies en los Secrets. Se intentará usar modo normal/OAuth."
           fi
+
+      - name: TEST DIRECTO YT-DLP
+        run: |
+          echo "Probando descarga con cliente web_creator..."
+          yt-dlp \
+            --extractor-args "youtube:player_client=web_creator" \
+            --format "bestaudio[ext=m4a]/bestaudio/best" \
+            --no-playlist \
+            --cookiefile cookies.txt \
+            --get-title \
+            "https://www.youtube.com/watch?v=Y3diMf0k_XE" || echo "❌ Falló el test directo"
 
       - name: EJECUTAR BOT VIRAL
         env:

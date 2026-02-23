@@ -155,50 +155,56 @@ def search_trending_video():
 
 def download_audio_and_transcribe(video_url):
     """
-    Descarga el audio usando yt-dlp con headers anti-block.
+    Descarga el audio usando yt-dlp con estrategia robusta para CI/CD (v3.9).
     """
     logger.info("⬇️ Descargando audio del video...")
     
-    # Configuración de Bypass Maestro (v3.7: The Claude Special)
+    cookies_path = Path(__file__).resolve().parent / "cookies.txt"
+    
     ydl_opts = {
-        'format': 'bestaudio/best', 
+        'format': 'bestaudio[ext=m4a]/bestaudio/best',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
-            'preferredquality': '192',
+            'preferredquality': '128',
         }],
         'outtmpl': 'temp_audio.%(ext)s',
-        'quiet': False, 
+        'quiet': False,
         'no_warnings': False,
         'nocheckcertificate': True,
         'ignoreerrors': False,
+        # Estrategia Claude: usar web_creator que no requiere JS challenge
         'extractor_args': {
             'youtube': {
-                'player_client': ['tv_embedded', 'web'], # Basado en sugerencia de Claude para máximo bypass
+                'player_client': ['web_creator', 'web'],
+                'player_skip': ['webpage'],  # Evita el n-challenge JS
             }
         },
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            'Accept-Language': 'es-ES,es;q=0.9',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        }
     }
     
-    # OPCIÓN COOKIES: Autenticación real
-    cookies_path = Path(__file__).resolve().parent / "cookies.txt"
-    if cookies_path.exists():
-        logger.info("🍪 Autenticando con sesión real (cookies.txt)...")
+    # Verificación de cookies (mínimo 100 bytes para asegurar que no están vacías)
+    if cookies_path.exists() and cookies_path.stat().st_size > 100:
+        logger.info(f"🍪 Autenticando con sesión real (cookies.txt: {cookies_path.stat().st_size} bytes)...")
         ydl_opts['cookiefile'] = str(cookies_path)
+    else:
+        logger.warning("⚠️ cookies.txt no encontrado o es sospechosamente pequeño. Intentando modo emergencia...")
     
     try:
         # Limpieza previa
-        if Path("temp_audio.mp3").exists(): Path("temp_audio.mp3").unlink()
-        for f in Path(".").glob("temp_audio.*"): 
+        for f in Path(".").glob("temp_audio.*"):
             try: f.unlink()
             except: pass
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
             
-        # Verificar si se descargó
+        # Buscar el archivo mp3 generado
         if not Path("temp_audio.mp3").exists():
-            # Si yt-dlp descargó algo pero no lo convirtió (ej: temp_audio.m4a o webm)
             for f in Path(".").glob("temp_audio.*"):
                 if f.suffix != ".mp3":
                     logger.info(f"Renombrando {f.name} a temp_audio.mp3")
@@ -211,10 +217,11 @@ def download_audio_and_transcribe(video_url):
         logger.info("🧠 Subiendo audio a Google GenAI para análisis...")
         
         if not client_gemini:
-             raise ValueError("Cliente Gemini no iniciado")
+            raise ValueError("Cliente Gemini no iniciado")
 
         upload_response = genai.upload_file("temp_audio.mp3", mime_type="audio/mp3", display_name="Audio Viral Analysis")
         logger.info(f"Subido con ID: {upload_response.name}. Esperando procesamiento...")
+        return upload_response
 
         while True:
             file_meta = genai.get_file(upload_response.name)
@@ -382,7 +389,7 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v3.7 (CLAUDE SPECIAL)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v3.9 (CLAUDE STRATEGY)'...")
     
     # 1. Buscar
     video_data = search_trending_video()
