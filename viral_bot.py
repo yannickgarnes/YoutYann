@@ -158,22 +158,23 @@ def download_audio_and_transcribe(video_url):
     """
     logger.info("⬇️ Descargando audio del video...")
     
-    # Configuración anti-bot para yt-dlp
+    # Configuración de Bypass Total (Multi-Client)
     ydl_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}],
         'outtmpl': 'temp_audio',
         'quiet': True,
         'no_warnings': True,
-        'nocheckcertificate': True, # Saltar errores SSL
-        'source_address': '0.0.0.0', # Forzar IPv4
-        # Cabeceras falsas de Chrome para parecer humano
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-            'Accept-Language': 'en-us,en;q=0.5',
-            'Sec-Fetch-Mode': 'navigate',
-        }
+        'nocheckcertificate': True, 
+        'source_address': '0.0.0.0',
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios', 'web_safari'],
+                'player_skip': ['webpage', 'configs'],
+            }
+        },
+        # Forzar cabeceras de navegador moderno en mobile
+        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
     }
     
     try:
