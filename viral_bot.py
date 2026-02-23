@@ -159,40 +159,44 @@ def download_audio_and_transcribe(video_url):
     """
     logger.info("⬇️ Descargando audio del video...")
     
-    # Configuración de Bypass Maestro (Cookies + Multi-Client)
+    # Configuración de Bypass Maestro (v3.3: Ultimate Compatibility)
     ydl_opts = {
-        'format': 'bestaudio/best',
-        'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}],
-        'outtmpl': 'temp_audio',
+        'format': 'best', # Bajamos lo mejor que haya (video+audio) para asegurar que NO falle el formato
+        'postprocessors': [{
+            'key': 'FFmpegExtractAudio',
+            'preferredcodec': 'mp3',
+            'preferredquality': '192',
+        }],
+        'outtmpl': 'temp_audio_raw.%(ext)s', # Usamos extensión para que yt-dlp no se líe
         'quiet': True,
         'no_warnings': True,
-        'nocheckcertificate': True, 
-        'source_address': '0.0.0.0',
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios', 'mweb'],
-                'player_skip': ['webpage', 'configs'],
-            }
-        },
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        'nocheckcertificate': True,
     }
     
     # OPCIÓN COOKIES: Si existe cookies.txt, es el bypass definitivo
     cookies_path = Path(__file__).resolve().parent / "cookies.txt"
     if cookies_path.exists():
-        logger.info("🍪 Usando archivo de cookies para bypass de YouTube...")
+        logger.info("🍪 Autenticando con cookies.txt...")
         ydl_opts['cookiefile'] = str(cookies_path)
-    # OPCIÓN OAUTH: Fallback si no hay cookies
     else:
-        token_path = Path(__file__).resolve().parent / "token.json"
-        if token_path.exists():
-            logger.info("🔑 Usando OAuth token para autenticar descarga en YouTube...")
-            ydl_opts['username'] = 'oauth2'
-            ydl_opts['password'] = ''
+        # Solo usamos spoofing si no hay más remedio
+        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['ios', 'mweb']}}
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            # Primero borramos si existe algo previo
+            for f in Path(".").glob("temp_audio_raw*"): f.unlink()
+            if Path("temp_audio.mp3").exists(): Path("temp_audio.mp3").unlink()
+            
             ydl.download([video_url])
+            
+            # Buscamos el archivo mp3 generado por el postprocessor
+            # yt-dlp con FFmpegExtractAudio genera un archivo .mp3
+            if not Path("temp_audio.mp3").exists():
+                # Si falló la conversión pero bajó algo, intentamos renombrar el raw
+                raw_files = list(Path(".").glob("temp_audio_raw*"))
+                if raw_files:
+                    os.rename(raw_files[0], "temp_audio.mp3")
             
         logger.info("🧠 Subiendo audio a Google GenAI para análisis...")
         
@@ -368,7 +372,7 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v3.0 (ULTRA-VIRAL)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v3.3 (ULTIMATE COMPATIBILITY)'...")
     
     # 1. Buscar
     video_data = search_trending_video()

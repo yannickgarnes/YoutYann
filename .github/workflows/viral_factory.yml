@@ -36,8 +36,13 @@ jobs:
           YOUTUBE_API_KEY: "${{ secrets.YOUTUBE_API_KEY }}"
 
       - name: Setup YouTube cookies
-        run: echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
-        if: "secrets.YOUTUBE_COOKIES != ''"
+        run: |
+          if [ -n "${{ secrets.YOUTUBE_COOKIES }}" ]; then
+            echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
+            echo "✅ cookies.txt creado."
+          else
+            echo "⚠️ No hay cookies en los Secrets. Se intentará usar modo normal/OAuth."
+          fi
 
       - name: EJECUTAR BOT VIRAL
         env:
