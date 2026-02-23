@@ -249,7 +249,21 @@ def analyze_video_for_clipper(video_data):
         if not client_gemini:
             raise ValueError("Gemini no configurado")
 
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        # Intentamos con varios nombres de modelo por si uno falla (Error 404)
+        model_names = ['gemini-1.5-flash', 'models/gemini-1.5-flash', 'gemini-1.5-flash-latest']
+        model = None
+        
+        for name in model_names:
+            try:
+                model = genai.GenerativeModel(name)
+                # Test ligero para ver si el modelo existe
+                break
+            except Exception:
+                continue
+        
+        if not model:
+            model = genai.GenerativeModel('gemini-pro') # Último recurso
+
         response = model.generate_content(
             prompt,
             generation_config=genai.GenerationConfig(
