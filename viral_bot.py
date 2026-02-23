@@ -155,14 +155,14 @@ def search_trending_video():
 
 def download_audio_and_transcribe(video_url):
     """
-    Descarga el audio usando yt-dlp con estrategia robusta para CI/CD (v3.9).
+    Descarga el audio usando yt-dlp con estrategia v4.0 (Total Bypass).
     """
     logger.info("⬇️ Descargando audio del video...")
     
     cookies_path = Path(__file__).resolve().parent / "cookies.txt"
     
     ydl_opts = {
-        'format': 'bestaudio[ext=m4a]/bestaudio/best',
+        'format': 'ba/b',
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
@@ -173,29 +173,21 @@ def download_audio_and_transcribe(video_url):
         'no_warnings': False,
         'nocheckcertificate': True,
         'ignoreerrors': False,
-        # Estrategia Claude: usar web_creator que no requiere JS challenge
         'extractor_args': {
             'youtube': {
-                'player_client': ['web_creator', 'web'],
-                'player_skip': ['webpage'],  # Evita el n-challenge JS
+                'player_client': ['ios', 'web'], # ios es el más robusto contra PO tokens
+                'player_skip': ['webpage', 'configs'],
             }
         },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-            'Accept-Language': 'es-ES,es;q=0.9',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        }
+        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'
     }
     
-    # Verificación de cookies (mínimo 100 bytes para asegurar que no están vacías)
-    if cookies_path.exists() and cookies_path.stat().st_size > 100:
-        logger.info(f"🍪 Autenticando con sesión real (cookies.txt: {cookies_path.stat().st_size} bytes)...")
+    if cookies_path.exists():
+        logger.info(f"🍪 Conectando con cookies ({cookies_path.stat().st_size} bytes)...")
         ydl_opts['cookiefile'] = str(cookies_path)
-    else:
-        logger.warning("⚠️ cookies.txt no encontrado o es sospechosamente pequeño. Intentando modo emergencia...")
     
     try:
-        # Limpieza previa
+        # Limpieza
         for f in Path(".").glob("temp_audio.*"):
             try: f.unlink()
             except: pass
@@ -203,25 +195,27 @@ def download_audio_and_transcribe(video_url):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
             
-        # Buscar el archivo mp3 generado
+        # Verificar archivo
         if not Path("temp_audio.mp3").exists():
             for f in Path(".").glob("temp_audio.*"):
                 if f.suffix != ".mp3":
-                    logger.info(f"Renombrando {f.name} a temp_audio.mp3")
                     f.rename("temp_audio.mp3")
                     break
             
         if not Path("temp_audio.mp3").exists():
-            raise ValueError("No se pudo generar el archivo temp_audio.mp3")
+            raise ValueError("Cero formatos encontrados. YouTube bloqueó el acceso.")
 
-        logger.info("🧠 Subiendo audio a Google GenAI para análisis...")
+        logger.info("🧠 Audio listo. Analizando con IA...")
         
         if not client_gemini:
-            raise ValueError("Cliente Gemini no iniciado")
+            raise ValueError("Gemini no disponible")
 
-        upload_response = genai.upload_file("temp_audio.mp3", mime_type="audio/mp3", display_name="Audio Viral Analysis")
-        logger.info(f"Subido con ID: {upload_response.name}. Esperando procesamiento...")
+        upload_response = genai.upload_file("temp_audio.mp3", mime_type="audio/mp3")
         return upload_response
+        
+    except Exception as e:
+        logger.error(f"❌ Error crítico en v4.0: {e}")
+        return None
 
         while True:
             file_meta = genai.get_file(upload_response.name)

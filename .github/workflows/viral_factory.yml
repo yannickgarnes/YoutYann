@@ -56,14 +56,12 @@ jobs:
 
       - name: TEST DIRECTO YT-DLP
         run: |
-          echo "Probando descarga con cliente web_creator..."
-          yt-dlp \
-            --extractor-args "youtube:player_client=web_creator" \
-            --format "bestaudio[ext=m4a]/bestaudio/best" \
+          echo "Probando descarga con estrategia v4.0 (iOS)..."
+          yt-dlp "https://www.youtube.com/watch?v=Y3diMf0k_XE" \
+            --extractor-args "youtube:player_client=ios" \
+            --cookies cookies.txt \
             --no-playlist \
-            --cookiefile cookies.txt \
-            --get-title \
-            "https://www.youtube.com/watch?v=Y3diMf0k_XE" || echo "❌ Falló el test directo"
+            --get-title || echo "❌ Falló el test directo"
 
       - name: EJECUTAR BOT VIRAL
         env:
