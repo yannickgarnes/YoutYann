@@ -119,29 +119,30 @@ def search_trending_video():
     yesterday = (datetime.utcnow() - timedelta(days=1)).isoformat("T") + "Z"
     
     query = "|".join(CHANNELS_TO_WATCH)
-    logger.info(f"🔍 Buscando videos recientes de: {query}...")
+    logger.info(f"🔍 Buscando videos ULTRA-VIRALES de: {query}...")
     
     try:
         request = youtube.search().list(
             part="snippet",
-            q=query,
+            q=f"{query} lo mejor",
             type="video",
-            order="date", 
-            publishedAfter=yesterday,
-            maxResults=1,
-            videoDuration="long" 
+            order="viewCount", # <--- BUSCAMOS LO MÁS VISTO
+            publishedAfter=(datetime.utcnow() - timedelta(days=7)).isoformat("T") + "Z", # Última semana
+            maxResults=5,
+            relevanceLanguage="es"
         )
         response = request.execute()
         
-        if not response['items']:
-            logger.warning("⚠️ No se encontraron videos nuevos hoy.")
+        if not response.get('items'):
+            logger.warning("⚠️ No se encontraron videos virales nuevos.")
             return None
         
+        # Elegimos el primero (el más visto)
         video = response['items'][0]
         video_title = video['snippet']['title']
         video_id = video['id']['videoId']
         
-        logger.info(f"✅ VIDEO ENCONTRADO: {video_title} (https://youtu.be/{video_id})")
+        logger.info(f"✅ VIDEO VIRAL ENCONTRADO: {video_title} (https://youtu.be/{video_id})")
         return {
             "id": video_id,
             "title": video_title,
@@ -158,7 +159,7 @@ def download_audio_and_transcribe(video_url):
     """
     logger.info("⬇️ Descargando audio del video...")
     
-    # Configuración de Bypass Total (Multi-Client)
+    # Configuración de Bypass Maestro (Triple Spoofing)
     ydl_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}],
@@ -169,11 +170,10 @@ def download_audio_and_transcribe(video_url):
         'source_address': '0.0.0.0',
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'ios', 'web_safari'],
+                'player_client': ['android', 'ios', 'mweb'],
                 'player_skip': ['webpage', 'configs'],
             }
         },
-        # Forzar cabeceras de navegador moderno en mobile
         'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
     }
     
