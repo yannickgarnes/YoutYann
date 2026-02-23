@@ -322,7 +322,21 @@ def render_viral_video(video_id, analysis):
         if response.status_code != 200:
             logger.error(f"❌ Error de Creatomate ({response.status_code}): {response.text}")
             if "not found" in response.text.lower():
-                logger.error("⚠️ El Template ID no existe en tu cuenta de Creatomate.")
+                logger.error("⚠️ El Template ID no existe. Buscando plantillas disponibles en tu cuenta...")
+                try:
+                    # v6.4: Auto-descubrimiento de plantillas
+                    tpl_url = "https://api.creatomate.com/v1/templates"
+                    tpl_res = requests.get(tpl_url, headers={"Authorization": f"Bearer {CREATOMATE_API_KEY}"})
+                    if tpl_res.status_code == 200:
+                        templates = tpl_res.json()
+                        logger.info("📋 Tienes estas plantillas en tu cuenta:")
+                        for t in templates:
+                            logger.info(f"   - Nombre: '{t['name']}' | ID: {t['id']}")
+                        logger.error("👉 Copia uno de los IDs de arriba y ponlo en el Secret 'CREATOMATE_TEMPLATE_ID' de GitHub.")
+                    else:
+                        logger.warning("No se pudieron listar las plantillas de Creatomate.")
+                except Exception as ex:
+                    logger.warning(f"Error descubriendo plantillas: {ex}")
             elif "modifications" in response.text.lower():
                 logger.error("⚠️ Los nombres de los elementos (Video, Text) no coinciden con tu plantilla.")
             return None
