@@ -1,50 +1,50 @@
-
 name: Viral Shorts Factory
 
 # Trigger: Schedule
 on:
   schedule:
-    - cron: '0 13,18,21 * * *' 
-  workflow_dispatch: 
+    - cron: "0 13,18,21 * * *"
+  workflow_dispatch:
 
 jobs:
   viral_bot_job:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout del código
-      uses: actions/checkout@v3
+      - name: Checkout del código
+        uses: actions/checkout@v3
 
-    - name: Configurar Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.11' # Actualizado a 3.11 para evitar advertencias
+      - name: Configurar Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11" # Actualizado a 3.11 para evitar advertencias
 
-    - name: Instalar FFmpeg
-      run: |
-        sudo apt-get update
-        sudo apt-get install ffmpeg
+      - name: Instalar FFmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install ffmpeg
 
-    - name: Instalar librerías
-      run: |
-        pip install -r requirements.txt
+      - name: Instalar librerías
+        run: |
+          pip install -r requirements.txt
 
-    - name: Debug Variables (Oculto)
-      run: |
-        echo "Check Env Vars..."
-        if [ -z "$YOUTUBE_API_KEY" ]; then echo "❌ YOUTUBE_API_KEY VACIO"; else echo "✅ YOUTUBE_API_KEY OK"; fi
-      env:
-        YOUTUBE_API_KEY: "${{ secrets.YOUTUBE_API_KEY }}"
+      - name: Debug Variables (Oculto)
+        run: |
+          echo "Check Env Vars..."
+          if [ -z "$YOUTUBE_API_KEY" ]; then echo "❌ YOUTUBE_API_KEY VACIO"; else echo "✅ YOUTUBE_API_KEY OK"; fi
+        env:
+          YOUTUBE_API_KEY: "${{ secrets.YOUTUBE_API_KEY }}"
 
-    - name: EJECUTAR BOT VIRAL
-      env:
-        # ATENCIÓN: Comillas dobles AÑADIDAS para evitar errores de espacios
-        YOUTUBE_API_KEY: "${{ secrets.YOUTUBE_API_KEY }}"
-        GEMINI_API_KEY: "${{ secrets.GEMINI_API_KEY }}"
-        CREATOMATE_API_KEY: "${{ secrets.CREATOMATE_API_KEY }}"
-        CREATOMATE_TEMPLATE_ID: "${{ secrets.CREATOMATE_TEMPLATE_ID }}"
-        # El JSON es un bloque multilínea, mejor dejarlo sin comillas si es muy largo, pero probemos con comillas
-        # OJO: Si el JSON tiene saltos de línea, GitHub lo rompe. Lo ideal es pasarlo como variable ENV directa.
-        YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }} 
-      run: |
-        python viral_bot.py
+      - name: Setup YouTube cookies
+        run: echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
+        if: "secrets.YOUTUBE_COOKIES != ''"
+
+      - name: EJECUTAR BOT VIRAL
+        env:
+          YOUTUBE_API_KEY: "${{ secrets.YOUTUBE_API_KEY }}"
+          GEMINI_API_KEY: "${{ secrets.GEMINI_API_KEY }}"
+          CREATOMATE_API_KEY: "${{ secrets.CREATOMATE_API_KEY }}"
+          CREATOMATE_TEMPLATE_ID: "${{ secrets.CREATOMATE_TEMPLATE_ID }}"
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+        run: |
+          python viral_bot.py

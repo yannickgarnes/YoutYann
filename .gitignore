@@ -1,0 +1,19 @@
+# Python
+venv/
+__pycache__/
+*.py[cod]
+
+# Credentials (SENSITIVE - DO NOT UPLOAD)
+token.json
+client_secret.json
+cookies.txt
+
+# Binaries and large files
+ffmpeg.exe
+ffprobe.exe
+ffmpeg.zip
+ffmpeg_unzipped/
+
+# Temp files
+temp_audio.mp3
+final_short.mp4

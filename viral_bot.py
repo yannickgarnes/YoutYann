@@ -159,7 +159,7 @@ def download_audio_and_transcribe(video_url):
     """
     logger.info("⬇️ Descargando audio del video...")
     
-    # Configuración de Bypass Maestro (Triple Spoofing)
+    # Configuración de Bypass Maestro (Cookies + Multi-Client)
     ydl_opts = {
         'format': 'bestaudio/best',
         'postprocessors': [{'key': 'FFmpegExtractAudio','preferredcodec': 'mp3'}],
@@ -174,8 +174,21 @@ def download_audio_and_transcribe(video_url):
                 'player_skip': ['webpage', 'configs'],
             }
         },
-        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     }
+    
+    # OPCIÓN COOKIES: Si existe cookies.txt, es el bypass definitivo
+    cookies_path = Path(__file__).resolve().parent / "cookies.txt"
+    if cookies_path.exists():
+        logger.info("🍪 Usando archivo de cookies para bypass de YouTube...")
+        ydl_opts['cookiefile'] = str(cookies_path)
+    # OPCIÓN OAUTH: Fallback si no hay cookies
+    else:
+        token_path = Path(__file__).resolve().parent / "token.json"
+        if token_path.exists():
+            logger.info("🔑 Usando OAuth token para autenticar descarga en YouTube...")
+            ydl_opts['username'] = 'oauth2'
+            ydl_opts['password'] = ''
     
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -355,7 +368,7 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIIP v2.6 (yt-dlp Headers)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v3.0 (ULTRA-VIRAL)'...")
     
     # 1. Buscar
     video_data = search_trending_video()
