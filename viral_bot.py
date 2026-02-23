@@ -245,39 +245,46 @@ def analyze_video_for_clipper(video_data):
     }}
     """
     
-    try:
-        if not client_gemini:
-            raise ValueError("Gemini no configurado")
-
-        # Intentamos con varios nombres de modelo por si uno falla (Error 404)
-        model_names = ['gemini-1.5-flash', 'models/gemini-1.5-flash', 'gemini-1.5-flash-latest']
-        model = None
-        
-        for name in model_names:
-            try:
-                model = genai.GenerativeModel(name)
-                # Test ligero para ver si el modelo existe
-                break
-            except Exception:
-                continue
-        
-        if not model:
-            model = genai.GenerativeModel('gemini-pro') # Último recurso
-
-        response = model.generate_content(
-            prompt,
-            generation_config=genai.GenerationConfig(
-                response_mime_type="application/json"
+    # Lista de modelos a probar (v5.2: Call-time Fallback)
+    model_names = [
+        'gemini-1.5-flash', 
+        'gemini-1.5-flash-latest', 
+        'gemini-2.0-flash-exp',
+        'gemini-pro'
+    ]
+    
+    last_error = None
+    for name in model_names:
+        try:
+            logger.info(f"Trying Gemini model: {name}...")
+            model = genai.GenerativeModel(name)
+            response = model.generate_content(
+                prompt,
+                generation_config=genai.GenerationConfig(
+                    response_mime_type="application/json"
+                )
             )
-        )
-        
-        result = json.loads(response.text)
-        logger.info(f"💡 Clip inferido: '{result['viral_title']}' ({result['start_time']}s - {result['end_time']}s)")
-        return result
-        
-    except Exception as e:
-        logger.error(f"❌ Error en análisis AI: {e}")
-        return None
+            
+            result = json.loads(response.text)
+            logger.info(f"✅ Éxito con modelo '{name}'")
+            logger.info(f"💡 Clip inferido: '{result['viral_title']}' ({result['start_time']}s - {result['end_time']}s)")
+            return result
+            
+        except Exception as e:
+            last_error = str(e)
+            logger.warning(f"⚠️ Falló modelo '{name}': {e}")
+            continue
+            
+    # Si llegamos aquí, todos fallaron
+    logger.error(f"❌ Todos los modelos Gemini fallaron. Último error: {last_error}")
+    
+    # Diagnóstico extra: Listar modelos disponibles
+    try:
+        available = [m.name for m in genai.list_models()]
+        logger.info(f"Modelos disponibles en este entorno: {available}")
+    except: pass
+    
+    return None
 
 def render_viral_video(video_id, analysis):
     """Manda a renderizar a Creatomate"""
