@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 CREATOMATE_API_KEY = os.environ.get("CREATOMATE_API_KEY") 
-CREATOMATE_TEMPLATE_ID = os.environ.get("CREATOMATE_TEMPLATE_ID") or "c023d838-8e6d-4786-8dce-09695d8f6d3f"
+# v7.0: Plantilla vertical profesional con subtítulos dinámicos (Default ID)
+CREATOMATE_TEMPLATE_ID = os.environ.get("CREATOMATE_TEMPLATE_ID") or "e402bbbe-cea0-486f-8130-85ba434dfee7"
 
 # Canales a monitorear
 CHANNELS_TO_WATCH = ["Ibai Llanos", "TheGrefg", "ElRubius", "AuronPlay", "IlloJuan"]
@@ -230,7 +231,8 @@ def analyze_video_for_clipper(video_data):
     - Descripción: {details['description']}
     
     Basándote en el título y la descripción, infiere qué momento del video 
-    sería el MÁS VIRAL para hacer un clip de 30-50 segundos.
+    sería el MÁS VIRAL para un Short de 15-58 segundos. 
+    Busca un "HOOK" (gancho) potente para que el video empiece con mucha energía.
     
     Responde EXCLUSIVAMENTE en JSON:
     {{
@@ -302,14 +304,18 @@ def render_viral_video(video_id, analysis):
     
     modifications = {
         "Video": f"https://www.youtube.com/watch?v={video_id}", 
-        "TrimStart": analysis['start_time'],
-        "TrimDuration": analysis['end_time'] - analysis['start_time'],
+        "Video.trim_start": analysis['start_time'],
+        "Video.duration": analysis['end_time'] - analysis['start_time'],
         "Text": analysis['viral_title'], 
     }
     
     payload = {
         "template_id": CREATOMATE_TEMPLATE_ID,
-        "modifications": modifications
+        "modifications": modifications,
+        "output_format": "mp4",
+        "frame_rate": 30,
+        "width": 1080,
+        "height": 1920
     }
     
     if not CREATOMATE_API_KEY:
@@ -431,8 +437,9 @@ def main():
         return
 
     # 4. Subir a YouTube Shorts
-    full_description = f"{analysis['viral_title']}\n\n#shorts #viral #clips\n\nCréditos: {video_data['channel']}"
-    upload_to_youtube_shorts(final_video_url, analysis['viral_title'], full_description)
+    title_with_tag = f"{analysis['viral_title']} #Shorts"
+    full_description = f"{analysis['viral_title']}\n\n#shorts #viral #clips #español\n\nCréditos: {video_data['channel']}"
+    upload_to_youtube_shorts(final_video_url, title_with_tag, full_description)
 
     logger.info("😴 Ciclo terminado.")
 
