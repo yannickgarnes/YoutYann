@@ -159,19 +159,25 @@ def download_audio_and_transcribe(video_url):
     """
     logger.info("⬇️ Descargando audio del video...")
     
-    # Configuración de Bypass Maestro (v3.4: The Purge)
+    # Configuración de Bypass Maestro (v3.5: The Android Strategy)
     ydl_opts = {
-        'format': 'bestaudio/best', # Formato estándar infalible para audio
+        'format': 'bestaudio/best', 
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
             'preferredquality': '192',
         }],
         'outtmpl': 'temp_audio.%(ext)s',
-        'quiet': False, # ACTIVAMOS LOGS PARA VER QUÉ PASA
+        'quiet': False, 
         'no_warnings': False,
         'nocheckcertificate': True,
-        'ignoreerrors': True,
+        'ignoreerrors': False,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android'], # Android es el más estable para saltar el n-challenge con cookies
+                'player_skip': ['webpage', 'configs'],
+            }
+        }
     }
     
     # OPCIÓN COOKIES: Autenticación real
@@ -179,21 +185,18 @@ def download_audio_and_transcribe(video_url):
     if cookies_path.exists():
         logger.info("🍪 Autenticando con sesión real (cookies.txt)...")
         ydl_opts['cookiefile'] = str(cookies_path)
-        # IMPORTANTE: Con cookies NO usamos spoofing, queremos que actúe como tu navegador
-    else:
-        logger.warning("⚠️ No se encontró cookies.txt, usando spoofing de emergencia...")
-        ydl_opts['extractor_args'] = {'youtube': {'player_client': ['ios', 'mweb']}}
     
     try:
         # Limpieza previa
         if Path("temp_audio.mp3").exists(): Path("temp_audio.mp3").unlink()
+        for f in Path(".").glob("temp_audio.*"): f.unlink()
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([video_url])
             
         # Verificar si se descargó
         if not Path("temp_audio.mp3").exists():
-            # Si yt-dlp descargó algo pero no lo convirtió (ej: temp_audio.m4a)
+            # Si yt-dlp descargó algo pero no lo convirtió (ej: temp_audio.m4a o webm)
             for f in Path(".").glob("temp_audio.*"):
                 if f.suffix != ".mp3":
                     logger.info(f"Renombrando {f.name} a temp_audio.mp3")
@@ -377,7 +380,7 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v3.4 (THE PURGE)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v3.5 (ANDROID STRATEGY)'...")
     
     # 1. Buscar
     video_data = search_trending_video()
