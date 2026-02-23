@@ -241,37 +241,53 @@ def analyze_video_for_clipper(video_data):
     }}
     """
     
-    # Lista de modelos a probar (v6.1: Security & Robust Fallback)
-    model_names = [
-        'gemini-1.5-flash', 
-        'gemini-1.5-flash-8b',
-        'gemini-2.0-flash',
-        'gemini-1.5-pro'
-    ]
+    # v6.2: Auto-descubrimiento de modelos
+    logger.info("🔍 Descubriendo modelos disponibles para esta API Key...")
     
+    try:
+        available_models = [m.name for m in client_gemini.models.list()]
+        # Filtramos solo los que soportan generación de contenido
+        flash_models = [m for m in available_models if 'flash' in m.lower()]
+        other_models = [m for m in available_models if m not in flash_models]
+        
+        # Prioridad: Flash models primero (más baratos/rápidos)
+        model_names = flash_models + other_models
+        logger.info(f"📋 Modelos encontrados: {model_names}")
+    except Exception as e:
+        logger.warning(f"⚠️ No se pudo listar modelos: {e}")
+        # Fallback a lista estática v6.1 si el listado falla
+        model_names = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro']
+
     last_error = None
     for name in model_names:
+        # Limpiar prefijo 'models/' si existe para el SDK moderno (el SDK ya lo gestiona)
+        clean_name = name.split('/')[-1]
+        
         try:
-            logger.info(f"Probando Gemini (SDK Moderno): {name}...")
+            logger.info(f"Probando Gemini (v6.2): {clean_name}...")
             response = client_gemini.models.generate_content(
-                model=name,
+                model=clean_name,
                 contents=prompt,
                 config={'response_mime_type': 'application/json'}
             )
             
             result = json.loads(response.text)
-            logger.info(f"✅ Éxito con modelo '{name}'")
+            logger.info(f"✅ ¡ÉXITO! Modelo utilizado: '{clean_name}'")
             logger.info(f"💡 Clip inferido: '{result['viral_title']}' ({result['start_time']}s - {result['end_time']}s)")
             return result
             
         except Exception as e:
             last_error = str(e)
-            logger.warning(f"⚠️ Falló modelo '{name}': {e}")
+            if "429" in last_error:
+                logger.warning(f"⏳ Modelo '{clean_name}' sin cuota (429). Probando siguiente...")
+            elif "404" in last_error:
+                logger.warning(f"❓ Modelo '{clean_name}' no encontrado (404).")
+            else:
+                logger.warning(f"⚠️ Falló modelo '{clean_name}': {e}")
             continue
             
     # Si llegamos aquí, todos fallaron
-    logger.error(f"❌ Todos los modelos fallaron en el SDK moderno. Último error: {last_error}")
-    
+    logger.error(f"❌ MISIÓN FALLIDA: Ningún modelo Gemini funcionó. Último error: {last_error}")
     return None
 
 def render_viral_video(video_id, analysis):
