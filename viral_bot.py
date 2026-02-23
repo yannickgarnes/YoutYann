@@ -133,13 +133,14 @@ def search_trending_video():
             logger.warning("⚠️ No se encontraron videos virales nuevos.")
             return None
         
-        # v8.0: Elegimos uno al azar de los top 5 para evitar repetir siempre el mismo
+        # v8.1: Aleatoriedad real para evitar bucles de "mismo video"
         import random
-        video = random.choice(response['items'])
+        random.shuffle(response['items'])
+        video = response['items'][0]
         video_title = video['snippet']['title']
         video_id = video['id']['videoId']
         
-        logger.info(f"✅ VIDEO VIRAL ENCONTRADO: {video_title} (https://youtu.be/{video_id})")
+        logger.info(f"✅ VIDEO VIRAL ELEGIDO (v8.1): {video_title} (https://youtu.be/{video_id})")
         return {
             "id": video_id,
             "title": video_title,
@@ -295,10 +296,10 @@ def analyze_video_for_clipper(video_data):
 
 def render_viral_video(video_id, analysis):
     """
-    v8.0: PURE JSON SOURCE ENGINE (Bypass Templates)
-    Crea un diseño profesional vertical con auto-zoom y subtítulos dinámicos.
+    v8.1: PURE JSON SOURCE ENGINE - ULTRA ROBUST
+    Define el canvas 9:16, zoom inteligente y subtítulos dinámicos word-by-word.
     """
-    logger.info("🎨 Renderizando video con el Motor 'Pure JSON' (Estilo Vizard)...")
+    logger.info("🎨 Renderizando video con el Motor 'Pure JSON' (Estilo Vizard v8.1)...")
     
     url = "https://api.creatomate.com/v1/renders"
     headers = {
@@ -306,7 +307,7 @@ def render_viral_video(video_id, analysis):
         "Content-Type": "application/json"
     }
 
-    # Definimos la composición profesional desde cero
+    # v8.1: Composición mejorada con dimensiones explícitas
     source = {
         "output_format": "mp4",
         "width": 1080,
@@ -314,41 +315,44 @@ def render_viral_video(video_id, analysis):
         "frame_rate": 30,
         "elements": [
             {
-                # Elemento 1: El Video original con Auto-Zoom (Vizard Style)
+                # Elemento 1: El Video original (Base)
+                "id": "video-1",
                 "type": "video",
                 "track": 1,
                 "source": f"https://www.youtube.com/watch?v={video_id}",
                 "time": 0,
                 "duration": min(analysis['end_time'] - analysis['start_time'], 58),
                 "trim_start": analysis['start_time'],
-                "fit": "cover", # Esto hace el zoom vertical para que no se vea como "fotos"
+                "width": "100%",
+                "height": "100%",
+                "fit": "cover", # v8.1: Aseguramos que llene el vertical 9:16
                 "x_alignment": "50%",
                 "y_alignment": "50%"
             },
             {
-                # Elemento 2: Subtítulos dinámicos automáticos (Word-by-word)
+                # Elemento 2: Subtítulos dinámicos (Word-by-word)
                 "type": "text",
                 "track": 2,
-                "transcript_source": "video-1", # Referencia al audio del elemento anterior
+                "transcript_source": "video-1",
                 "time": 0,
                 "duration": "video-1.duration",
-                "y": "80%", # Posición en la parte inferior
+                "y": "75%", 
                 "width": "90%",
-                "height": "15%",
+                "height": "20%",
                 "text_alignment": "center",
-                "font_family": "Montserrat",
-                "font_weight": "900",
-                "font_size": "75 px",
+                "font_family": "open-sans", # v8.1: Fuente más estándar y segura
+                "font_weight": "800",
+                "font_size": "80 px",
                 "text_transform": "uppercase",
-                "color": "#ffff00", # Amarillo Vizard
+                "color": "#ffff00", 
                 "stroke_color": "#000000",
-                "stroke_width": "3 px",
-                "background_color": "rgba(0,0,0,0.4)",
-                "padding": "20 px",
+                "stroke_width": "4 px",
+                "background_color": "rgba(0,0,0,0.3)",
+                "padding": "30 px",
                 "animations": [
                     {
                         "type": "text-appearance",
-                        "scope": "word", # Aparece palabra por palabra
+                        "scope": "word",
                         "duration": "0.1 s"
                     }
                 ]
@@ -356,22 +360,13 @@ def render_viral_video(video_id, analysis):
         ]
     }
     
-    # Asignamos IDs para las referencias de transcript
-    source["elements"][0]["id"] = "video-1"
-
-    payload = {
-        "source": source
-    }
+    payload = {"source": source}
     
-    if not CREATOMATE_API_KEY:
-        logger.error("❌ FALTA CREATOMATE_API_KEY.")
-        return None
-
     try:
         response = requests.post(url, headers=headers, json=payload)
         
         if response.status_code not in [200, 202]:
-            logger.error(f"❌ Error de Creatomate ({response.status_code}): {response.text}")
+            logger.error(f"❌ Error API Creatomate ({response.status_code}): {response.text}")
             return None
 
         render_data = response.json()
@@ -379,22 +374,25 @@ def render_viral_video(video_id, analysis):
         logger.info(f"⏳ Procesando render ({render_id})...")
         
         attempts = 0
-        while attempts < 120: # 10 mins max
+        while attempts < 120:
             time.sleep(5)
             status_res = requests.get(f"{url}/{render_id}", headers=headers).json()
-            status = status_res['status']
+            status = status_res.get('status', 'unknown')
             
             if status == 'succeeded':
                 video_url = status_res['url']
-                logger.info(f"✨ ¡Video Renderizado!: {video_url}")
+                logger.info(f"✨ ¡VIDEO RENDERIZADO CON ÉXITO!: {video_url}")
                 return video_url
             elif status == 'failed':
-                logger.error(f"❌ Render falló: {status_res.get('errorMessage')}")
+                err_msg = status_res.get('errorMessage')
+                # v8.1: Log detallado si falla el render
+                logger.error(f"❌ Render falló en los servidores de Creatomate: {err_msg}")
+                logger.debug(f"Detalles fallo: {status_res}")
                 return None
             attempts += 1
         return None
     except Exception as e:
-        logger.error(f"❌ Error en Creatomate Engine: {e}")
+        logger.error(f"❌ Error crítico en Creatomate Engine: {e}")
         return None
 
 def upload_to_youtube_shorts(video_url, title, description):
@@ -443,7 +441,7 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v8.0 (PURE AI ENGINE)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v8.1 (ROBUST VIZARD ENGINE)'...")
     
     # 1. Buscar video viral
     video_data = search_trending_video()
