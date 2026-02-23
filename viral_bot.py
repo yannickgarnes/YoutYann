@@ -9,8 +9,7 @@ from pathlib import Path
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
-from google import genai
-from google.genai import types
+import google.generativeai as genai
 from datetime import datetime, timedelta
 
 # --- CONFIGURACIÓN DE LOGGER ---
@@ -42,7 +41,8 @@ try:
         logger.error("❌ FALTA LA API KEY DE YOUTUBE.")
     
     if GEMINI_API_KEY:
-        client_gemini = genai.Client(api_key=GEMINI_API_KEY)
+        genai.configure(api_key=GEMINI_API_KEY)
+        client_gemini = True
         logger.info("✅ Gemini Client OK (Key Hardcoded/Env)")
     else:
          logger.error("❌ FALTA LA API KEY DE GEMINI.")
@@ -185,19 +185,14 @@ def download_audio_and_transcribe(video_url):
         if not client_gemini:
              raise ValueError("Cliente Gemini no iniciado")
 
-        with open("temp_audio.mp3", "rb") as f:
-            upload_response = client_gemini.files.upload(
-                file=f,
-                config={'mime_type': 'audio/mp3', 'display_name': 'Audio Viral Analysis'}
-            )
-        
+        upload_response = genai.upload_file("temp_audio.mp3", mime_type="audio/mp3", display_name="Audio Viral Analysis")
         logger.info(f"Subido con ID: {upload_response.name}. Esperando procesamiento...")
 
         while True:
-            file_meta = client_gemini.files.get(name=upload_response.name)
-            if file_meta.state == "ACTIVE":
+            file_meta = genai.get_file(upload_response.name)
+            if file_meta.state.name == "ACTIVE":
                 break
-            elif file_meta.state == "FAILED":
+            elif file_meta.state.name == "FAILED":
                 raise ValueError("Fallo al procesar audio en Google AI")
             time.sleep(2)
             
@@ -233,21 +228,10 @@ def analyze_transcript_for_clipper(audio_file_obj):
         if not client_gemini:
             raise ValueError("Modelo Gemini no iniciado")
 
-        response = client_gemini.models.generate_content(
-            model='gemini-1.5-flash',
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_text(text=prompt),
-                        types.Part.from_uri(
-                            file_uri=audio_file_obj.uri,
-                            mime_type=audio_file_obj.mime_type
-                        )
-                    ]
-                )
-            ],
-            config=types.GenerateContentConfig(
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(
+            [prompt, audio_file_obj],
+            generation_config=genai.GenerationConfig(
                 response_mime_type="application/json"
             )
         )
@@ -256,10 +240,10 @@ def analyze_transcript_for_clipper(audio_file_obj):
         logger.info(f"💡 Clip detectado: '{result['viral_title']}' ({result['start_time']}s - {result['end_time']}s)")
         
         try:
-             client_gemini.files.delete(name=audio_file_obj.name)
+             genai.delete_file(audio_file_obj.name)
              os.remove("temp_audio.mp3") 
-        except:
-            pass
+        except Exception as del_e:
+            logger.warning(f"No se pudo limpiar el archivo temporal: {del_e}")
 
         return result
         
