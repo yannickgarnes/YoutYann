@@ -15,13 +15,9 @@ from datetime import datetime, timedelta
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# --- CONFIGURACIÓN ENV (HARDCODED) ---
-ENV_YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
-ENV_GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
-
-YOUTUBE_API_KEY = ENV_YOUTUBE_API_KEY if ENV_YOUTUBE_API_KEY else "AIzaSyAtgNFFZvAp0C0BZpl57IVVcvShPR1V6cw"
-GEMINI_API_KEY = ENV_GEMINI_API_KEY if ENV_GEMINI_API_KEY else "AIzaSyAtgNFFZvAp0C0BZpl57IVVcvShPR1V6cw"
-
+# --- CONFIGURACIÓN ENV ---
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 CREATOMATE_API_KEY = os.environ.get("CREATOMATE_API_KEY") 
 CREATOMATE_TEMPLATE_ID = os.environ.get("CREATOMATE_TEMPLATE_ID") or "c023d838-8e6d-4786-8dce-09695d8f6d3f"
 
@@ -35,15 +31,16 @@ client_gemini = None
 try:
     if YOUTUBE_API_KEY:
         youtube = build('youtube', 'v3', developerKey=YOUTUBE_API_KEY)
-        logger.info("✅ YouTube Client OK (Key Hardcoded/Env)")
+        logger.info("✅ YouTube Client OK")
     else:
-        logger.error("❌ FALTA LA API KEY DE YOUTUBE.")
+        logger.error("❌ ERROR: YOUTUBE_API_KEY no encontrada en Secrets.")
     
     if GEMINI_API_KEY:
+        # v6.1: Usando el SDK moderno con configuración robusta
         client_gemini = genai.Client(api_key=GEMINI_API_KEY)
-        logger.info("✅ Gemini Client OK (Modern google-genai SDK)")
+        logger.info("✅ Gemini Client OK (v6.1 Security Hardened)")
     else:
-         logger.error("❌ FALTA LA API KEY DE GEMINI.")
+         logger.error("❌ ERROR: GEMINI_API_KEY no encontrada en Secrets.")
 
 except Exception as e:
     logger.error(f"Error grave al iniciar clientes: {e}")
@@ -244,11 +241,11 @@ def analyze_video_for_clipper(video_data):
     }}
     """
     
-    # Lista de modelos a probar (v6.0: Modern SDK Fallback)
+    # Lista de modelos a probar (v6.1: Security & Robust Fallback)
     model_names = [
         'gemini-1.5-flash', 
-        'gemini-2.0-flash-001',
-        'gemini-2.0-flash-exp',
+        'gemini-1.5-flash-8b',
+        'gemini-2.0-flash',
         'gemini-1.5-pro'
     ]
     
@@ -380,7 +377,7 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v5.0 (API ONLY)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v6.1 (ULTRA-CLEAN)'...")
     
     # 1. Buscar video viral
     video_data = search_trending_video()
