@@ -321,24 +321,23 @@ def render_viral_video(video_id, analysis):
         
         if response.status_code != 200:
             logger.error(f"❌ Error de Creatomate ({response.status_code}): {response.text}")
-            if "not found" in response.text.lower():
-                logger.error("⚠️ El Template ID no existe. Buscando plantillas disponibles en tu cuenta...")
+            # v6.5: Gatillo de descubrimiento más permisivo
+            error_text = response.text.lower()
+            if "template" in error_text and ("found" in error_text or "not" in error_text):
+                logger.info("🔍 Buscando automáticamente plantillas en tu cuenta de Creatomate...")
                 try:
-                    # v6.4: Auto-descubrimiento de plantillas
                     tpl_url = "https://api.creatomate.com/v1/templates"
                     tpl_res = requests.get(tpl_url, headers={"Authorization": f"Bearer {CREATOMATE_API_KEY}"})
                     if tpl_res.status_code == 200:
                         templates = tpl_res.json()
-                        logger.info("📋 Tienes estas plantillas en tu cuenta:")
+                        logger.info("📋 Tienes estas plantillas disponibles:")
                         for t in templates:
-                            logger.info(f"   - Nombre: '{t['name']}' | ID: {t['id']}")
-                        logger.error("👉 Copia uno de los IDs de arriba y ponlo en el Secret 'CREATOMATE_TEMPLATE_ID' de GitHub.")
+                            logger.info(f"   - 👋 '{t['name']}' -> ID: {t['id']}")
+                        logger.error("🛑 CONFIGURACIÓN REQUERIDA: Copia un ID de arriba y ponlo en 'CREATOMATE_TEMPLATE_ID' en GitHub Secrets.")
                     else:
-                        logger.warning("No se pudieron listar las plantillas de Creatomate.")
+                        logger.warning("No se pudo obtener la lista de plantillas.")
                 except Exception as ex:
-                    logger.warning(f"Error descubriendo plantillas: {ex}")
-            elif "modifications" in response.text.lower():
-                logger.error("⚠️ Los nombres de los elementos (Video, Text) no coinciden con tu plantilla.")
+                    logger.warning(f"Error en el auto-descubrimiento: {ex}")
             return None
 
         render_data = response.json()
