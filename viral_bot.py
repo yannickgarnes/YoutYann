@@ -1,4 +1,3 @@
-
 import os
 import json
 import time
@@ -6,6 +5,7 @@ import requests
 import yt_dlp
 import sys
 import logging
+from pathlib import Path
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2.credentials import Credentials
@@ -26,7 +26,6 @@ GEMINI_API_KEY = ENV_GEMINI_API_KEY if ENV_GEMINI_API_KEY else "AIzaSyBSU4S0XSJB
 
 CREATOMATE_API_KEY = os.environ.get("CREATOMATE_API_KEY") 
 CREATOMATE_TEMPLATE_ID = os.environ.get("CREATOMATE_TEMPLATE_ID") or "c023d838-8e6d-4786-8dce-09695d8f6d3f"
-YOUTUBE_TOKEN_JSON = os.environ.get("YOUTUBE_TOKEN_JSON") 
 
 # Canales a monitorear
 CHANNELS_TO_WATCH = ["Ibai Llanos", "TheGrefg", "ElRubius", "AuronPlay", "IlloJuan"]
@@ -52,10 +51,69 @@ except Exception as e:
     logger.error(f"Error grave al iniciar clientes: {e}")
     sys.exit(1)
 
+def get_youtube_credentials():
+    """Carga credenciales desde la variable de entorno o desde token.json localmente"""
+    # pathlib asegura que la ruta sea agnóstica al SO y siempre busque junto a este script
+    base_dir = Path(__file__).resolve().parent
+    token_file = base_dir / "token.json"
+    
+    token_data = None
+    
+    # 1. Intentar desde variable de entorno (Prioridad para producción/GitHub Actions)
+    env_token = os.environ.get("YOUTUBE_TOKEN_JSON")
+    if env_token:
+        try:
+            token_data = json.loads(env_token)
+            logger.info("✅ Credenciales cargadas desde la variable de entorno YOUTUBE_TOKEN_JSON.")
+        except json.JSONDecodeError:
+            logger.warning("⚠️ YOUTUBE_TOKEN_JSON en entorno no es JSON válido. ¿Pusiste una ruta? Ignorando y pasando a archivo...")
+
+    # 2. Si no hay variable de entorno válida, intentar desde archivo local
+    if not token_data:
+        try:
+            if not token_file.exists():
+                logger.error(f"❌ No se encontró el archivo de credenciales en: {token_file}")
+                return None
+            
+            with open(token_file, 'r', encoding='utf-8') as f:
+                token_data = json.load(f)
+            logger.info("✅ Credenciales cargadas exitosamente desde token.json local.")
+            
+        except FileNotFoundError as e:
+            logger.error(f"❌ [Error de Archivo] {e}")
+            return None
+        except json.JSONDecodeError as e:
+            logger.error(f"❌ [Error JSON] El archivo {token_file.name} está mal formado: {e}")
+            return None
+        except PermissionError as e:
+            logger.error(f"❌ [Error de Permisos] No se puede leer {token_file.name}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"❌ [Error Inesperado] al leer token: {e}")
+            return None
+
+    # 3. Validación de Esquema (Keys de Google Cloud)
+    expected_keys = ['client_id', 'client_secret', 'refresh_token']
+    missing = [k for k in expected_keys if k not in token_data]
+    if missing:
+        logger.error(f"❌ [Error de Esquema] El JSON es inválido. Faltan los campos requeridos: {missing}")
+        logger.error("Asegúrate de haber generado el token.json con auth_youtube.py")
+        return None
+
+    try:
+        # Construir y retornar objeto Credentials de Google
+        return Credentials.from_authorized_user_info(
+            token_data, 
+            scopes=['https://www.googleapis.com/auth/youtube.upload']
+        )
+    except ValueError as e:
+        logger.error(f"❌ [Error Google Auth] El token es incompatible: {e}")
+        return None
+
 def search_trending_video():
     """Busca el video más reciente y viral de los canales top"""
     if not youtube:
-        logger.error("❌ No puedo buscar videos porque falta YOUTUBE_API_KEY.")
+        logger.error("❌ No puedo buscar videos porque faltan las credenciales de YouTube.")
         return None
 
     yesterday = (datetime.utcnow() - timedelta(days=1)).isoformat("T") + "Z"
@@ -270,8 +328,9 @@ def upload_to_youtube_shorts(video_url, title, description):
     """Sube el video final a YouTube Shorts"""
     logger.info("🚀 Preparando subida a YouTube Shorts...")
     
-    if not YOUTUBE_TOKEN_JSON:
-        logger.error("❌ NO HAY TOKEN.JSON: No se puede subir el video automáticamente.")
+    creds = get_youtube_credentials()
+    if not creds:
+        logger.error("❌ ABORTANDO: No se pudieron cargar las credenciales de YouTube.")
         return
 
     try:
@@ -279,10 +338,6 @@ def upload_to_youtube_shorts(video_url, title, description):
         with open("final_short.mp4", "wb") as f:
             f.write(r.content)
 
-        token_data = json.loads(YOUTUBE_TOKEN_JSON)
-        # Refrescar token si ha caducado
-        creds = Credentials.from_authorized_user_info(token_data, ['https://www.googleapis.com/auth/youtube.upload'])
-        
         service = build('youtube', 'v3', credentials=creds)
         
         body = {
