@@ -298,9 +298,10 @@ def analyze_video_for_clipper(video_data):
 
 def render_viral_video(video_id, analysis):
     """
-    v8.2: PURE JSON SOURCE ENGINE - ULTRA ROBUST
+    v9.0: BULLETPROOF RENDER ENGINE
+    Si falla el render con subtítulos, intenta uno básico para no perder el video.
     """
-    logger.info(f"🎨 Enviando a Creatomate Engine v8.2 (Clip: {analysis['viral_title']})...")
+    logger.info(f"🎨 INICIANDO MOTOR v9.0 (Clip: {analysis['viral_title']})...")
     
     url = "https://api.creatomate.com/v1/renders"
     headers = {
@@ -308,86 +309,91 @@ def render_viral_video(video_id, analysis):
         "Content-Type": "application/json"
     }
 
-    # v8.2: JSON con IDs limpios y fuente segura
-    source = {
-        "output_format": "mp4",
-        "width": 1080,
-        "height": 1920,
-        "frame_rate": 30,
-        "elements": [
+    def create_payload(with_subtitles=True):
+        elements = [
             {
-                "id": "main_video",
+                "id": "video-base",
                 "type": "video",
-                "track": 1, # Track 1: Fondo
                 "source": f"https://www.youtube.com/watch?v={video_id}",
                 "trim_start": float(analysis['start_time']),
                 "duration": float(min(analysis['end_time'] - analysis['start_time'], 58)),
-                "width": "100%",
-                "height": "100%",
+                "width": 1080,
+                "height": 1920,
+                "x": "50%",
+                "y": "50%",
                 "fit": "cover",
                 "audio": True
-            },
-            {
+            }
+        ]
+        
+        if with_subtitles:
+            elements.append({
                 "type": "text",
-                "track": 2, # Track 2: Superpuesto
-                "text": "[transcript]", # v8.3: REQUERIDO para activar el motor de subtítulos
-                "transcript_source": "main_video",
+                "text": "[transcript]",
+                "transcript_source": "video-base",
                 "width": "90%",
                 "height": "25%",
                 "y": "78%",
                 "text_alignment": "center",
-                "font_family": "Arial", # v8.3: Fuente ultra-compatible
+                "font_family": "open-sans",
                 "font_weight": "900",
                 "font_size": "85 px",
                 "text_transform": "uppercase",
                 "color": "#ffff00",
                 "stroke_color": "#000000",
                 "stroke_width": "5 px",
-                "animations": [
-                    {
-                        "type": "text-appearance",
-                        "scope": "word",
-                        "duration": "0.1 s"
-                    }
-                ]
-            }
-        ]
-    }
-    
-    payload = {"source": source}
-    
-    # Debug: Mostrar qué estamos enviando
-    logger.info(f"📤 Payload JSON: {json.dumps(payload)[:500]}...")
+                "animations": [{"type": "text-appearance", "scope": "word", "duration": "0.1 s"}]
+            })
+            
+        return {"source": {"output_format": "mp4", "width": 1080, "height": 1920, "elements": elements}}
 
+    # INTENTO 1: Con Subtítulos (Vizard Style)
+    logger.info("🎬 Intento 1: Renderizado completo con subtítulos dinámicos...")
+    payload_full = create_payload(True)
+    
     try:
-        response = requests.post(url, headers=headers, json=payload)
+        res = requests.post(url, headers=headers, json=payload_full)
+        if res.status_code in [200, 202]:
+            render_id = res.json()[0]['id']
+            logger.info(f"⏳ Procesando Intento 1 ({render_id})...")
+            
+            # Esperar resultado
+            start_poll = time.time()
+            while (time.time() - start_poll) < 300: # 5 mins
+                time.sleep(10)
+                status_res = requests.get(f"{url}/{render_id}", headers=headers).json()
+                if status_res.get('status') == 'succeeded':
+                    logger.info(f"✨ ¡VICTORIA! Video completo: {status_res['url']}")
+                    return status_res['url']
+                elif status_res.get('status') == 'failed':
+                    logger.warning(f"⚠️ Falló Intento 1: {status_res.get('errorMessage')}")
+                    break
+        else:
+            logger.warning(f"⚠️ Error API en Intento 1 ({res.status_code})")
+            
+        # INTENTO 2: Fallback Básico (Solo Video, sin transcripción)
+        logger.info("🔄 Intento 2: Renderizado básico de emergencia (sin subtítulos)...")
+        payload_safe = create_payload(False)
+        res_safe = requests.post(url, headers=headers, json=payload_safe)
         
-        if response.status_code not in [200, 202]:
-            logger.error(f"❌ Error API ({response.status_code}): {response.text}")
-            return None
+        if res_safe.status_code in [200, 202]:
+            render_id_safe = res_safe.json()[0]['id']
+            logger.info(f"⏳ Procesando Intento 2 ({render_id_safe})...")
+            
+            start_poll = time.time()
+            while (time.time() - start_poll) < 300:
+                time.sleep(10)
+                status_res = requests.get(f"{url}/{render_id_safe}", headers=headers).json()
+                if status_res.get('status') == 'succeeded':
+                    logger.info(f"✨ ¡ÉXITO (Rescate)! Video básico: {status_res['url']}")
+                    return status_res['url']
+                elif status_res.get('status') == 'failed':
+                    logger.error(f"❌ Falló hasta el intento de rescate: {status_res.get('errorMessage')}")
+                    break
 
-        render_data = response.json()
-        render_id = render_data[0]['id']
-        logger.info(f"⏳ Procesando render ({render_id})...")
-        
-        start_time = time.time()
-        while (time.time() - start_time) < 600: # 10 mins
-            time.sleep(10)
-            status_res = requests.get(f"{url}/{render_id}", headers=headers).json()
-            status = status_res.get('status', 'unknown')
-            
-            if status == 'succeeded':
-                logger.info(f"✨ ¡ÉXITO! Video: {status_res['url']}")
-                return status_res['url']
-            elif status == 'failed':
-                logger.error(f"❌ FALLO EN NUBE: {status_res.get('errorMessage')}")
-                return None
-            
-            logger.info(f"  ... {int(time.time() - start_time)}s")
-            
         return None
     except Exception as e:
-        logger.error(f"❌ Error Crítico Engine: {e}")
+        logger.error(f"❌ Error Crítico en Motor v9.0: {e}")
         return None
 
 def upload_to_youtube_shorts(video_url, title, description):
@@ -436,7 +442,7 @@ def upload_to_youtube_shorts(video_url, title, description):
         logger.error(f"❌ Error subiendo a YouTube: {e}")
 
 def main():
-    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v8.3 (THE VIZARD ENGINE)'...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v9.0 (FINAL BULLETPROOF)'...")
     
     # 1. Buscar video viral
     video_data = search_trending_video()
