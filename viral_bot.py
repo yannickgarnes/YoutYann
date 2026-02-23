@@ -155,9 +155,9 @@ def search_trending_video():
 
 def download_audio_and_transcribe(video_url):
     """
-    Descarga el audio usando yt-dlp con estrategia v4.0 (Total Bypass).
+    Descarga el audio usando yt-dlp con estrategia v4.1 (Resilience).
     """
-    logger.info("⬇️ Descargando audio del video...")
+    logger.info("🎬 INICIANDO 'VIRAL CLIPPER v4.1 (RESILIENCE)'...")
     
     cookies_path = Path(__file__).resolve().parent / "cookies.txt"
     
@@ -175,16 +175,19 @@ def download_audio_and_transcribe(video_url):
         'ignoreerrors': False,
         'extractor_args': {
             'youtube': {
-                'player_client': ['ios', 'web'], # ios es el más robusto contra PO tokens
+                'player_client': ['mweb', 'ios', 'web'], # mweb es actualmente el más permisivo
                 'player_skip': ['webpage', 'configs'],
             }
         },
+        # User-Agent de móvil para coincidir con el cliente mweb/ios
         'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Mobile/15E148 Safari/604.1'
     }
     
-    if cookies_path.exists():
+    if cookies_path.exists() and cookies_path.stat().st_size > 10:
         logger.info(f"🍪 Conectando con cookies ({cookies_path.stat().st_size} bytes)...")
         ydl_opts['cookiefile'] = str(cookies_path)
+    else:
+        logger.warning("⚠️ No se detectaron cookies válidas. El bloqueo es inminente.")
     
     try:
         # Limpieza
@@ -203,18 +206,18 @@ def download_audio_and_transcribe(video_url):
                     break
             
         if not Path("temp_audio.mp3").exists():
-            raise ValueError("Cero formatos encontrados. YouTube bloqueó el acceso.")
+            raise ValueError("Acceso denegado (Sign in to confirm you're not a bot)")
 
-        logger.info("🧠 Audio listo. Analizando con IA...")
+        logger.info("🧠 Audio descargado. Procesando con Gemini...")
         
         if not client_gemini:
-            raise ValueError("Gemini no disponible")
+            raise ValueError("Gemini API no configurada")
 
         upload_response = genai.upload_file("temp_audio.mp3", mime_type="audio/mp3")
         return upload_response
         
     except Exception as e:
-        logger.error(f"❌ Error crítico en v4.0: {e}")
+        logger.error(f"❌ Error en v4.1: {e}")
         return None
 
         while True:

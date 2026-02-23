@@ -46,19 +46,23 @@ jobs:
       - name: Setup YouTube cookies
         run: |
           if [ -n "${{ secrets.YOUTUBE_COOKIES }}" ]; then
-            echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
-            echo "✅ cookies.txt creado. Verificando formato..."
-            head -n 3 cookies.txt
-            echo "Tamaño del archivo: $(stat -c%s cookies.txt) bytes"
+            # Intentar decodificar Base64 primero, si falla tratar como texto plano
+            if echo "${{ secrets.YOUTUBE_COOKIES }}" | base64 -d > cookies.txt 2>/dev/null; then
+              echo "✅ cookies.txt restaurado desde Base64."
+            else
+              echo "${{ secrets.YOUTUBE_COOKIES }}" > cookies.txt
+              echo "✅ cookies.txt restaurado desde Texto Plano."
+            fi
+            echo "Diagnóstico (Tamaño): $(stat -c%s cookies.txt) bytes"
           else
-            echo "⚠️ No hay cookies en los Secrets. Se intentará usar modo normal/OAuth."
+            echo "⚠️ No hay cookies en los Secrets."
           fi
 
       - name: TEST DIRECTO YT-DLP
         run: |
-          echo "Probando descarga con estrategia v4.0 (iOS)..."
+          echo "Probando descarga con estrategia v4.1 (MWEB)..."
           yt-dlp "https://www.youtube.com/watch?v=Y3diMf0k_XE" \
-            --extractor-args "youtube:player_client=ios" \
+            --extractor-args "youtube:player_client=mweb" \
             --cookies cookies.txt \
             --no-playlist \
             --get-title || echo "❌ Falló el test directo"
