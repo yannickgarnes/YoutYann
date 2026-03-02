@@ -298,56 +298,24 @@ def analyze_video_for_clipper(video_data):
 
 def get_direct_video_url(youtube_url):
     """
-    v10.1: Usa yt-dlp con cookies del navegador en cascada para evitar bloqueos por bot.
-    Extrae un enlace directo al video (MP4/m3u8).
+    v10.0: Usa yt-dlp para extraer un enlace directo al video (MP4/m3u8).
+    Esto evita que Creatomate falle al procesar el proxy de YouTube.
     """
     logger.info(f"🔗 Extrayendo URL directa de: {youtube_url}...")
-    
-    # Navegadores a probar en orden. Si falla uno, intentará con el siguiente.
-    browsers_to_try = [None, 'chrome', 'edge', 'firefox']
-    
     try:
         import yt_dlp
-        for browser in browsers_to_try:
-            browser_log = browser if browser else "sin cookies"
-            logger.info(f"🍪 Intentando yt-dlp con: {browser_log}")
-            
-            ydl_opts = {
-                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-                'quiet': True,
-                'no_warnings': True,
-                'force_generic_extractor': False
-            }
-            
-            if browser:
-                ydl_opts['cookiesfrombrowser'] = (browser,)
-
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(youtube_url, download=False)
-                    direct_url = info.get('url')
-                    if direct_url:
-                        logger.info(f"✅ URL directa extraída exitosamente con {browser_log}")
-                        return direct_url
-            except Exception as e:
-                err_msg = str(e)
-                if "Sign in to confirm you’re not a bot" in err_msg or "cookie" in err_msg.lower():
-                    logger.warning(f"⚠️ {browser_log} bloqueado o sin cookies válidas. Probando siguiente...")
-                    continue
-                else:
-                    logger.error(f"❌ Error yt-dlp usando {browser_log}: {e}")
-                    # A veces hay errores de video no disponible o edad, seguimos intentando
-                    continue
-                    
-        logger.warning(f"🚨 Todos los métodos de yt-dlp fallaron. Usando URL original como fallback (podría fallar en Creatomate).")
-        return youtube_url 
-
-    except ImportError:
-        logger.error("❌ Librería yt-dlp no encontrada.")
-        return youtube_url
+        ydl_opts = {
+            'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'quiet': True,
+            'no_warnings': True,
+            'force_generic_extractor': False
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(youtube_url, download=False)
+            return info.get('url')
     except Exception as e:
-        logger.error(f"❌ Error inesperado en get_direct_video_url: {e}")
-        return youtube_url
+        logger.warning(f"⚠️ No se pudo extraer URL directa con yt-dlp: {e}")
+        return youtube_url # Fallback a la original
 
 def render_viral_video(video_id, analysis):
     """
@@ -366,71 +334,19 @@ def render_viral_video(video_id, analysis):
     direct_url = get_direct_video_url(f"https://www.youtube.com/watch?v={video_id}")
 
     def create_payload(with_subtitles=True):
-        duration = float(min(analysis['end_time'] - analysis['start_time'], 58))
-        
         elements = [
-            # FONDO DIFUMINADO (Blurred background para formato 9:16)
-            {
-                "id": "background-blur",
-                "type": "video",
-                "source": direct_url,
-                "trim_start": float(analysis['start_time']),
-                "duration": duration,
-                "width": 1080,
-                "height": 1920,
-                "x": "50%",
-                "y": "50%",
-                "fit": "cover",
-                "volume": "0%",  
-                "filters": [
-                    {
-                        "type": "blur",
-                        "radius": "45 px"
-                    },
-                    {
-                        "type": "brightness",
-                        "level": "70%" 
-                    }
-                ]
-            },
-            # VIDEO PRINCIPAL (En caja sobre el fondo)
             {
                 "id": "video-base",
                 "type": "video",
                 "source": direct_url,
                 "trim_start": float(analysis['start_time']),
-                "duration": duration,
-                "width": "100%", 
-                "height": "auto", 
+                "duration": float(min(analysis['end_time'] - analysis['start_time'], 58)),
+                "width": 1080,
+                "height": 1920,
                 "x": "50%",
                 "y": "50%",
-                "fit": "contain", 
+                "fit": "cover",
                 "audio": True
-            },
-            # TÍTULO HOOK (Arriba, llamativo)
-            {
-                "id": "hook-text",
-                "type": "text",
-                "text": analysis['viral_title'].upper(),
-                "width": "85%",
-                "height": "auto",
-                "x": "50%",
-                "y": "16%",
-                "text_alignment": "center",
-                "y_alignment": "center",
-                "font_family": "Montserrat", 
-                "font_weight": "900",
-                "font_size": "95 px",
-                "color": "#ffffff",
-                "background_color": "#e50914",
-                "background_padding": "30 px 50 px",
-                "background_border_radius": "20 px",
-                "shadow_color": "rgba(0,0,0,0.8)",
-                "shadow_blur": "25 px",
-                "animations": [
-                    {"type": "scale", "time": "start", "duration": "0.4 s", "easing": "elastic-out", "start_scale": "0%"},
-                    {"type": "pulse", "time": "start", "duration": "loop", "interval": "2.5 s", "scale": "105%"}
-                ]
             }
         ]
         
@@ -440,24 +356,20 @@ def render_viral_video(video_id, analysis):
                 "text": "[transcript]",
                 "transcript_source": "video-base",
                 "width": "90%",
-                "height": "auto",
-                "x": "50%",
-                "y": "82%",
+                "height": "25%",
+                "y": "78%",
                 "text_alignment": "center",
-                "font_family": "Montserrat", 
+                "font_family": "open-sans",
                 "font_weight": "900",
-                "font_size": "90 px",
+                "font_size": "85 px",
                 "text_transform": "uppercase",
                 "color": "#ffff00",
                 "stroke_color": "#000000",
-                "stroke_width": "8 px",
-                "shadow_color": "rgba(0,0,0,1)",
-                "shadow_blur": "10 px",
-                "shadow_y": "8 px",
+                "stroke_width": "5 px",
                 "animations": [{"type": "text-appearance", "scope": "word", "duration": "0.1 s"}]
             })
             
-        return {"source": {"output_format": "mp4", "width": 1080, "height": 1920, "frame_rate": 30, "elements": elements}}
+        return {"source": {"output_format": "mp4", "width": 1080, "height": 1920, "elements": elements}}
 
     # INTENTO 1: Con Subtítulos (Vizard Style)
     logger.info("🎬 Intento 1: Renderizado completo con subtítulos dinámicos...")
