@@ -306,12 +306,16 @@ def get_direct_video_url(youtube_url):
     # 0. Intentar crear cookies.txt dinámicamente si existe la variable de entorno
     env_cookies = os.environ.get("YOUTUBE_COOKIES")
     if env_cookies:
+        logger.info(f"🔎 DEBUG: Encontrada variable YOUTUBE_COOKIES (Tamaño: {len(env_cookies)} caracteres)")
         try:
             with open('cookies.txt', 'w', encoding='utf-8') as f:
                 f.write(env_cookies)
             logger.info("✅ Archivo cookies.txt generado exitosamente desde la variable YOUTUBE_COOKIES.")
+            logger.info(f"🔎 DEBUG cookies.txt content preview: {env_cookies[:50]}...")
         except Exception as e:
             logger.warning(f"⚠️ No se pudo generar cookies.txt desde la variable de entorno: {e}")
+    else:
+        logger.warning("🚨 DEBUG: La variable de entorno YOUTUBE_COOKIES ESTÁ VACÍA O NO EXISTE en este entorno local/GitHub Actions.")
 
     # Navegadores a probar en orden. 
     # "cookies.txt" es la clave para servidores tipo GitHub Actions / Railway
