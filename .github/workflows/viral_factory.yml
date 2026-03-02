@@ -37,5 +37,6 @@ jobs:
           CREATOMATE_API_KEY: "${{ secrets.CREATOMATE_API_KEY }}"
           CREATOMATE_TEMPLATE_ID: "${{ secrets.CREATOMATE_TEMPLATE_ID }}"
           YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+          YOUTUBE_COOKIES: "${{ secrets.YOUTUBE_COOKIES }}"
         run: |
           python viral_bot.py
