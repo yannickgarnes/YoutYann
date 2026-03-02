@@ -298,80 +298,75 @@ def analyze_video_for_clipper(video_data):
 
 def get_direct_video_url(youtube_url):
     """
-    v10.4: Usa yt-dlp con `YOUTUBE_COOKIES` y añade plugin OAuth2 como último recurso.
-    Extrae un enlace directo al video (MP4/m3u8) evitando bloqueos en servidores/nube.
+    v10.5: ULTIMATE CLOUD BYPASS.
+    Usa yt-dlp de forma agresiva saltándose bloqueos de IP de GitHub Actions simulando ser un móvil/TV
+    mediante parámetros especiales del extractor de YouTube y suplantación de identidad.
     """
-    logger.info(f"🔗 Extrayendo URL directa de: {youtube_url}...")
+    logger.info(f"🔗 Extrayendo URL directa de: {youtube_url} (Motor Bypass v10.5)...")
     
-    # 0. Intentar crear cookies.txt dinámicamente si existe la variable de entorno
+    import yt_dlp
+
+    # Generamos la batería de opciones más salvajes para engañar a YouTube
+    ydl_opts = {
+        'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'quiet': True,
+        'no_warnings': True,
+        # Forzar a usar la API de Android y de Web Creator para saltar bloqueos de web normal
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web_creator'],
+                'po_token': ['web+po_token', 'android+po_token'] # PoToken spoof
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+    }
+
+    # Intentar inyectar cookies si existen en GitHub Secrets
     env_cookies = os.environ.get("YOUTUBE_COOKIES")
     if env_cookies:
-        logger.info(f"🔎 DEBUG: Encontrada variable YOUTUBE_COOKIES (Tamaño: {len(env_cookies)} caracteres)")
         try:
             with open('cookies.txt', 'w', encoding='utf-8') as f:
                 f.write(env_cookies)
-            logger.info("✅ Archivo cookies.txt generado exitosamente desde la variable YOUTUBE_COOKIES.")
-            logger.info(f"🔎 DEBUG cookies.txt content preview: {env_cookies[:50]}...")
-        except Exception as e:
-            logger.warning(f"⚠️ No se pudo generar cookies.txt desde la variable de entorno: {e}")
-    else:
-        logger.warning("🚨 DEBUG: La variable de entorno YOUTUBE_COOKIES ESTÁ VACÍA O NO EXISTE en este entorno local/GitHub Actions.")
-
-    # Navegadores a probar en orden. 
-    # Añadimos 'oauth2' como mecanismo especial de yt-dlp
-    browsers_to_try = ['cookies.txt', 'oauth2', None, 'chrome', 'edge', 'firefox']
-    
+            if os.path.exists('cookies.txt'):
+                 ydl_opts['cookiefile'] = 'cookies.txt'
+                 logger.info("✅ Cargado archivo cookies.txt dinámico para ayudar al bypass.")
+        except Exception:
+            pass
+            
     try:
-        import yt_dlp
-        for browser in browsers_to_try:
-            browser_log = browser if browser else "sin cookies"
-            logger.info(f"🍪 Intentando yt-dlp con: {browser_log}")
-            
-            ydl_opts = {
-                'format': 'bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-                'quiet': True,
-                'no_warnings': True,
-                'force_generic_extractor': False
-            }
-            
-            if browser == 'cookies.txt':
-                if os.path.exists('cookies.txt'):
-                    ydl_opts['cookiefile'] = 'cookies.txt'
-                else:
-                    logger.info("⚠️ Archivo cookies.txt no encontrado localmente. Saltando método...")
-                    continue
-            elif browser == 'oauth2':
-                 # Usa el flujo de autenticación de TV de YouTube integrado en yt-dlp
-                 ydl_opts['username'] = 'oauth2'
-            elif browser:
-                ydl_opts['cookiesfrombrowser'] = (browser,)
-
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    info = ydl.extract_info(youtube_url, download=False)
-                    direct_url = info.get('url')
-                    if direct_url:
-                        logger.info(f"✅ URL directa extraída exitosamente con {browser_log}")
-                        return direct_url
-            except Exception as e:
-                err_msg = str(e)
-                if "Sign in to confirm you’re not a bot" in err_msg or "cookie" in err_msg.lower() or "oauth2" in err_msg.lower():
-                    logger.warning(f"⚠️ {browser_log} bloqueado o sin cookies válidas. Probando siguiente...")
-                    continue
-                else:
-                    logger.error(f"❌ Error yt-dlp usando {browser_log}: {e}")
-                    # A veces hay errores de video no disponible o edad, seguimos intentando
-                    continue
-                    
-        logger.warning(f"🚨 Todos los métodos de yt-dlp fallaron. Usando URL original como fallback (podría fallar en Creatomate).")
-        return youtube_url 
-
-    except ImportError:
-        logger.error("❌ Librería yt-dlp no encontrada.")
-        return youtube_url
+        logger.info("🍪 Lanzando ataque yt-dlp con configuración Anti-Cloud...")
+        # Intento principal agresivo
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(youtube_url, download=False)
+            if info.get('url'):
+                logger.info(f"✅ ¡URL DIRECTA EXTRAÍDA CON ÉXITO! (CLIENT: ANDROID/WEB)")
+                return info.get('url')
     except Exception as e:
-        logger.error(f"❌ Error inesperado en get_direct_video_url: {e}")
-        return youtube_url
+         logger.warning(f"⚠️ Falló el ataque principal: {e}")
+         
+    # Fallback 2: Intentar con m3u8 (HLS) nativo que suele estar menos capado
+    try:
+        logger.info("🔄 Intentando fallback HLS (m3u8)...")
+        ydl_opts_fallback = {
+             'format': 'best', # Forzar formato unificado
+             'quiet': True,
+             'extractor_args': {'youtube': {'player_client': ['ios']}} # Hacernos pasar por iPhone
+        }
+        if os.path.exists('cookies.txt'):
+            ydl_opts_fallback['cookiefile'] = 'cookies.txt'
+            
+        with yt_dlp.YoutubeDL(ydl_opts_fallback) as ydl:
+            info = ydl.extract_info(youtube_url, download=False)
+            if info.get('url'):
+                logger.info(f"✅ ¡URL EXTRAÍDA POR HLS (IOS)! ")
+                return info.get('url')
+    except Exception as e:
+        logger.error(f"❌ Fallo masivo yt-dlp: {e}")
+
+    logger.warning("🚨 ENTREGANDO URl ORIGINAL: Todo falló. Que Creatomate rece lo que sepa.")
+    return youtube_url
 
 def render_viral_video(video_id, analysis):
     """
