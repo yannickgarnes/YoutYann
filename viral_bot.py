@@ -298,7 +298,7 @@ def analyze_video_for_clipper(video_data):
 
 def get_direct_video_url(youtube_url):
     """
-    v10.3: Usa yt-dlp con `YOUTUBE_COOKIES` desde GitHub Secrets o archivo cookies.txt.
+    v10.4: Usa yt-dlp con `YOUTUBE_COOKIES` y añade plugin OAuth2 como último recurso.
     Extrae un enlace directo al video (MP4/m3u8) evitando bloqueos en servidores/nube.
     """
     logger.info(f"🔗 Extrayendo URL directa de: {youtube_url}...")
@@ -318,8 +318,8 @@ def get_direct_video_url(youtube_url):
         logger.warning("🚨 DEBUG: La variable de entorno YOUTUBE_COOKIES ESTÁ VACÍA O NO EXISTE en este entorno local/GitHub Actions.")
 
     # Navegadores a probar en orden. 
-    # "cookies.txt" es la clave para servidores tipo GitHub Actions / Railway
-    browsers_to_try = ['cookies.txt', None, 'chrome', 'edge', 'firefox']
+    # Añadimos 'oauth2' como mecanismo especial de yt-dlp
+    browsers_to_try = ['cookies.txt', 'oauth2', None, 'chrome', 'edge', 'firefox']
     
     try:
         import yt_dlp
@@ -340,6 +340,9 @@ def get_direct_video_url(youtube_url):
                 else:
                     logger.info("⚠️ Archivo cookies.txt no encontrado localmente. Saltando método...")
                     continue
+            elif browser == 'oauth2':
+                 # Usa el flujo de autenticación de TV de YouTube integrado en yt-dlp
+                 ydl_opts['username'] = 'oauth2'
             elif browser:
                 ydl_opts['cookiesfrombrowser'] = (browser,)
 
@@ -352,7 +355,7 @@ def get_direct_video_url(youtube_url):
                         return direct_url
             except Exception as e:
                 err_msg = str(e)
-                if "Sign in to confirm you’re not a bot" in err_msg or "cookie" in err_msg.lower():
+                if "Sign in to confirm you’re not a bot" in err_msg or "cookie" in err_msg.lower() or "oauth2" in err_msg.lower():
                     logger.warning(f"⚠️ {browser_log} bloqueado o sin cookies válidas. Probando siguiente...")
                     continue
                 else:
