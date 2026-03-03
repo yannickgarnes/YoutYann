@@ -304,7 +304,7 @@ def get_direct_video_url(youtube_url):
     para sortear el bloqueo de IPs de GitHub Actions.
     """
     logger.info(f"🔗 Extrayendo URL directa de: {youtube_url} (Motor yt-dlp v12.0)...")
-
+    
     import tempfile
 
     try:
