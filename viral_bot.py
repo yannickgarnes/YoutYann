@@ -298,54 +298,84 @@ def analyze_video_for_clipper(video_data):
 
 def get_direct_video_url(youtube_url):
     """
-    v11.0: YT-DLP ENGINE.
-    Usa yt-dlp como librería Python para extraer la URL directa de stream
-    (sin descargar el vídeo), que Creatomate sí puede procesar.
+    v12.0: YT-DLP ENGINE + COOKIE AUTH.
+    Usa yt-dlp como librería Python para extraer la URL directa de stream.
+    Lee las cookies de YouTube del secret YOUTUBE_COOKIES (formato Netscape)
+    para sortear el bloqueo de IPs de GitHub Actions.
     """
-    logger.info(f"🔗 Extrayendo URL directa de: {youtube_url} (Motor yt-dlp v11.0)...")
-    
+    logger.info(f"🔗 Extrayendo URL directa de: {youtube_url} (Motor yt-dlp v12.0)...")
+
+    import tempfile
+
     try:
         import yt_dlp
-        
+
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
             'format': 'bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/best[ext=mp4]/best',
             'skip_download': True,
         }
-        
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(youtube_url, download=False)
-            
-            # Intentar URL del formato seleccionado directamente
-            url = info.get('url')
-            
-            # Si no hay URL directa (por ser formato combinado), buscar en los formatos
-            if not url and info.get('formats'):
-                # Buscar el mejor formato mp4 con vídeo y audio
-                for fmt in reversed(info['formats']):
-                    if (fmt.get('url') and 
-                        fmt.get('vcodec') != 'none' and 
-                        fmt.get('acodec') != 'none' and
-                        fmt.get('ext') == 'mp4'):
-                        url = fmt['url']
-                        break
-                
-                # Si no encontramos uno combinado, coger el mejor vídeo mp4
-                if not url:
+
+        # Leer cookies del entorno (secret de GitHub Actions)
+        cookies_content = os.environ.get("YOUTUBE_COOKIES", "")
+        cookie_file = None
+
+        if cookies_content:
+            # Escribir las cookies en un fichero temporal en formato Netscape
+            tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8')
+            # Asegurar cabecera Netscape si no la tiene
+            if not cookies_content.strip().startswith("# Netscape HTTP Cookie File"):
+                tmp.write("# Netscape HTTP Cookie File\n")
+            tmp.write(cookies_content)
+            tmp.flush()
+            cookie_file = tmp.name
+            tmp.close()
+            ydl_opts['cookiefile'] = cookie_file
+            logger.info("🍪 Usando cookies de YouTube del entorno.")
+        else:
+            logger.warning("⚠️ YOUTUBE_COOKIES no encontrado en entorno. Intentando sin autenticación...")
+
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(youtube_url, download=False)
+
+                # URL directa del formato seleccionado
+                url = info.get('url')
+
+                # Si no hay URL directa (formato combinado), buscar en formatos
+                if not url and info.get('formats'):
+                    # Mejor mp4 con vídeo + audio combinados
                     for fmt in reversed(info['formats']):
-                        if fmt.get('url') and fmt.get('ext') == 'mp4' and fmt.get('vcodec') != 'none':
+                        if (fmt.get('url') and
+                                fmt.get('vcodec') != 'none' and
+                                fmt.get('acodec') != 'none' and
+                                fmt.get('ext') == 'mp4'):
                             url = fmt['url']
                             break
-            
-            if url:
-                logger.info(f"✅ ¡ÉXITO! URL directa extraída con yt-dlp.")
-                return url
-            else:
-                logger.error("❌ yt-dlp no pudo extraer una URL válida.")
-                
+                    # Fallback: mejor mp4 solo vídeo
+                    if not url:
+                        for fmt in reversed(info['formats']):
+                            if fmt.get('url') and fmt.get('ext') == 'mp4' and fmt.get('vcodec') != 'none':
+                                url = fmt['url']
+                                break
+
+                if url:
+                    logger.info("✅ ¡ÉXITO! URL directa extraída con yt-dlp.")
+                    return url
+                else:
+                    logger.error("❌ yt-dlp no pudo extraer una URL válida de los formatos.")
+
+        finally:
+            # Limpiar fichero de cookies temporal
+            if cookie_file:
+                try:
+                    os.unlink(cookie_file)
+                except Exception:
+                    pass
+
     except ImportError:
-        logger.error("❌ yt-dlp no está instalado. Ejecuta: pip install yt-dlp")
+        logger.error("❌ yt-dlp no está instalado. Añade 'yt-dlp' a requirements.txt")
     except Exception as e:
         logger.error(f"❌ Error con yt-dlp: {e}")
 
