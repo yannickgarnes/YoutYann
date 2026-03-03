@@ -298,110 +298,91 @@ def analyze_video_for_clipper(video_data):
 
 def get_direct_video_url(youtube_url):
     """
-    v13.0: DOWNLOAD + CATBOX UPLOAD ENGINE.
-    Descarga el vídeo con yt-dlp+ffmpeg y lo sube a catbox.moe (host temporal
-    gratuito). Creatomate recibe una URL pública estable que siempre funciona.
-    Mucho más fiable que intentar extraer URLs directas de YouTube (IP-locked).
+    v12.0: YT-DLP ENGINE + COOKIE AUTH.
+    Usa yt-dlp como librería Python para extraer la URL directa de stream.
+    Lee las cookies de YouTube del secret YOUTUBE_COOKIES (formato Netscape)
+    para sortear el bloqueo de IPs de GitHub Actions.
     """
+    logger.info(f"🔗 Extrayendo URL directa de: {youtube_url} (Motor yt-dlp v12.0)...")
+    
     import tempfile
-    import glob
-    import shutil
-
-    logger.info(f"⬇️ Descargando vídeo: {youtube_url} (Motor v13.0 Download+Upload)...")
-
-    tmpdir = tempfile.mkdtemp()
-    output_template = os.path.join(tmpdir, 'video.%(ext)s')
-    cookie_file = None
 
     try:
         import yt_dlp
 
-        # --- Cookies ---
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'format': 'bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'skip_download': True,
+        }
+
+        # Leer cookies del entorno (secret de GitHub Actions)
         cookies_content = os.environ.get("YOUTUBE_COOKIES", "")
+        cookie_file = None
+
         if cookies_content:
+            # Escribir las cookies en un fichero temporal en formato Netscape
             tmp = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8')
+            # Asegurar cabecera Netscape si no la tiene
             if not cookies_content.strip().startswith("# Netscape HTTP Cookie File"):
                 tmp.write("# Netscape HTTP Cookie File\n")
             tmp.write(cookies_content)
             tmp.flush()
             cookie_file = tmp.name
             tmp.close()
+            ydl_opts['cookiefile'] = cookie_file
             logger.info("🍪 Usando cookies de YouTube del entorno.")
         else:
-            logger.warning("⚠️ YOUTUBE_COOKIES no encontrado. Intentando sin autenticación...")
+            logger.warning("⚠️ YOUTUBE_COOKIES no encontrado en entorno. Intentando sin autenticación...")
 
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            # 720p máx para limitar tamaño del archivo; ffmpeg combina vídeo+audio
-            'format': 'bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<=720]+bestaudio/best[height<=720]/best',
-            'outtmpl': output_template,
-            'merge_output_format': 'mp4',
-        }
-        if cookie_file:
-            ydl_opts['cookiefile'] = cookie_file
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(youtube_url, download=False)
 
-        logger.info("📥 Iniciando descarga (máx 720p)...")
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([youtube_url])
+                # URL directa del formato seleccionado
+                url = info.get('url')
 
-        # Buscar el archivo descargado
-        files = glob.glob(os.path.join(tmpdir, 'video.*'))
-        if not files:
-            logger.error("❌ No se encontró archivo descargado en el directorio temporal.")
-            return None
+                # Si no hay URL directa (formato combinado), buscar en formatos
+                if not url and info.get('formats'):
+                    # Mejor mp4 con vídeo + audio combinados
+                    for fmt in reversed(info['formats']):
+                        if (fmt.get('url') and
+                                fmt.get('vcodec') != 'none' and
+                                fmt.get('acodec') != 'none' and
+                                fmt.get('ext') == 'mp4'):
+                            url = fmt['url']
+                            break
+                    # Fallback: mejor mp4 solo vídeo
+                    if not url:
+                        for fmt in reversed(info['formats']):
+                            if fmt.get('url') and fmt.get('ext') == 'mp4' and fmt.get('vcodec') != 'none':
+                                url = fmt['url']
+                                break
 
-        video_path = files[0]
-        file_size_mb = os.path.getsize(video_path) / (1024 * 1024)
-        logger.info(f"✅ Descarga completada ({file_size_mb:.1f} MB). Subiendo a host temporal...")
+                if url:
+                    logger.info("✅ ¡ÉXITO! URL directa extraída con yt-dlp.")
+                    return url
+                else:
+                    logger.error("❌ yt-dlp no pudo extraer una URL válida de los formatos.")
 
-        # --- Subida a catbox.moe (gratis, sin registro, URL permanente) ---
-        with open(video_path, 'rb') as f:
-            upload_resp = requests.post(
-                'https://catbox.moe/user/api.php',
-                data={'reqtype': 'fileupload'},
-                files={'fileToUpload': ('video.mp4', f, 'video/mp4')},
-                timeout=300
-            )
-
-        if upload_resp.status_code == 200 and upload_resp.text.strip().startswith('https://'):
-            hosted_url = upload_resp.text.strip()
-            logger.info(f"✅ ¡ÉXITO! Vídeo alojado públicamente en: {hosted_url}")
-            return hosted_url
-        else:
-            logger.warning(f"⚠️ catbox.moe falló ({upload_resp.status_code}): {upload_resp.text[:100]}. Probando 0x0.st...")
-
-        # --- Fallback: 0x0.st ---
-        with open(video_path, 'rb') as f:
-            upload_resp2 = requests.post('https://0x0.st', files={'file': ('video.mp4', f, 'video/mp4')}, timeout=300)
-
-        if upload_resp2.status_code == 200 and upload_resp2.text.strip().startswith('https://'):
-            hosted_url = upload_resp2.text.strip()
-            logger.info(f"✅ ¡ÉXITO (fallback 0x0.st)! Vídeo en: {hosted_url}")
-            return hosted_url
-        else:
-            logger.error(f"❌ 0x0.st también falló ({upload_resp2.status_code}): {upload_resp2.text[:100]}")
+        finally:
+            # Limpiar fichero de cookies temporal
+            if cookie_file:
+                try:
+                    os.unlink(cookie_file)
+                except Exception:
+                    pass
 
     except ImportError:
-        logger.error("❌ yt-dlp no instalado. Añade 'yt-dlp' a requirements.txt")
+        logger.error("❌ yt-dlp no está instalado. Añade 'yt-dlp' a requirements.txt")
     except Exception as e:
-        logger.error(f"❌ Error en Motor v13.0: {e}")
-    finally:
-        if cookie_file:
-            try:
-                os.unlink(cookie_file)
-            except Exception:
-                pass
-        try:
-            shutil.rmtree(tmpdir, ignore_errors=True)
-        except Exception:
-            pass
+        logger.error(f"❌ Error con yt-dlp: {e}")
 
-    logger.error("🚨 Fallo total. Creatomate no podrá procesar la fuente.")
+    logger.error("🚨 Fallo total en extracción de URL. Creatomate no podrá procesar la fuente.")
     return None
 
 def render_viral_video(video_id, analysis):
-
     """
     v9.0: BULLETPROOF RENDER ENGINE
     Si falla el render con subtítulos, intenta uno básico para no perder el video.
