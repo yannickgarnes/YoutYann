@@ -298,60 +298,59 @@ def analyze_video_for_clipper(video_data):
 
 def get_direct_video_url(youtube_url):
     """
-    v10.6: THE COBALT PIVOT.
-    Reemplazo absoluto de yt-dlp por la API de Cobalt (co.wuk.sh u otros nodos).
-    Esto elude totalmente el ban de IP de GitHub Actions delegando la descarga
-    a un servidor de terceros diseñado para evadir a YouTube.
+    v11.0: YT-DLP ENGINE.
+    Usa yt-dlp como librería Python para extraer la URL directa de stream
+    (sin descargar el vídeo), que Creatomate sí puede procesar.
     """
-    logger.info(f"🔗 Extrayendo URL directa de: {youtube_url} (Motor Cobalt API v10.6)...")
+    logger.info(f"🔗 Extrayendo URL directa de: {youtube_url} (Motor yt-dlp v11.0)...")
     
-    # Nodos públicos de Cobalt API (Open Source)
-    # Si uno falla (por rate limit), pasamos al siguiente
-    cobalt_nodes = [
-        "https://api.cobalt.tools/api/json",
-        "https://co.wuk.sh/api/json",
-        "https://cobalt.qoid.co/api/json"
-    ]
-    
-    headers = {
-        "Accept": "application/json",
-        "Content-Type": "application/json",
-        "Origin": "https://cobalt.tools",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
-    
-    payload = {
-        "url": youtube_url,
-        "vQuality": "1080",      # Calidad preferida
-        "vCodec": "h264",        # Formato MP4 tradicional ideal para Creatomate
-        "isAudioOnly": False,
-        "aFormat": "mp3",
-        "isNoTTWatermark": True
-    }
-    
-    for node in cobalt_nodes:
-        logger.info(f"🌐 Consultando API externa: {node}")
-        try:
-            response = requests.post(node, json=payload, headers=headers, timeout=20)
+    try:
+        import yt_dlp
+        
+        ydl_opts = {
+            'quiet': True,
+            'no_warnings': True,
+            'format': 'bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            'skip_download': True,
+        }
+        
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(youtube_url, download=False)
             
-            if response.status_code in [200, 201]:
-                data = response.json()
-                video_url = data.get("url")
+            # Intentar URL del formato seleccionado directamente
+            url = info.get('url')
+            
+            # Si no hay URL directa (por ser formato combinado), buscar en los formatos
+            if not url and info.get('formats'):
+                # Buscar el mejor formato mp4 con vídeo y audio
+                for fmt in reversed(info['formats']):
+                    if (fmt.get('url') and 
+                        fmt.get('vcodec') != 'none' and 
+                        fmt.get('acodec') != 'none' and
+                        fmt.get('ext') == 'mp4'):
+                        url = fmt['url']
+                        break
                 
-                if video_url:
-                    logger.info("✅ ¡ÉXITO! URL del video extraída mediante Cobalt API.")
-                    return video_url
-                else:
-                    logger.warning(f"⚠️ El nodo {node} no devolvió una URL válida: {data}")
+                # Si no encontramos uno combinado, coger el mejor vídeo mp4
+                if not url:
+                    for fmt in reversed(info['formats']):
+                        if fmt.get('url') and fmt.get('ext') == 'mp4' and fmt.get('vcodec') != 'none':
+                            url = fmt['url']
+                            break
+            
+            if url:
+                logger.info(f"✅ ¡ÉXITO! URL directa extraída con yt-dlp.")
+                return url
             else:
-                logger.warning(f"⚠️ El nodo {node} devolvió un error HTTP {response.status_code}")
+                logger.error("❌ yt-dlp no pudo extraer una URL válida.")
                 
-        except requests.exceptions.RequestException as e:
-            logger.warning(f"⚠️ Fallo de conexión con {node}: {e}")
-            continue
+    except ImportError:
+        logger.error("❌ yt-dlp no está instalado. Ejecuta: pip install yt-dlp")
+    except Exception as e:
+        logger.error(f"❌ Error con yt-dlp: {e}")
 
-    logger.error("🚨 Todos los nodos de la API de descarga fallaron. Entregando URL original a Creatomate (posible fallo inminente).")
-    return youtube_url
+    logger.error("🚨 Fallo total en extracción de URL. Creatomate no podrá procesar la fuente.")
+    return None
 
 def render_viral_video(video_id, analysis):
     """
@@ -467,8 +466,17 @@ def render_viral_video(video_id, analysis):
     logger.info("🎬 Intento 1: Renderizado completo con subtítulos dinámicos...")
     payload_full = create_payload(True)
     
+    # URL base para estado de renders (sin la colección)
+    renders_status_url = "https://api.creatomate.com/v1/renders"
+
+    # Abortar si no tenemos URL directa
+    if not direct_url:
+        logger.error("❌ ABORTANDO render: no se pudo obtener URL directa del vídeo.")
+        return None
+
     try:
         res = requests.post(url, headers=headers, json=payload_full)
+        logger.info(f"📡 Respuesta Creatomate (Intento 1): {res.status_code} - {res.text[:200]}")
         if res.status_code in [200, 202]:
             render_id = res.json()[0]['id']
             logger.info(f"⏳ Procesando Intento 1 ({render_id})...")
@@ -477,20 +485,23 @@ def render_viral_video(video_id, analysis):
             start_poll = time.time()
             while (time.time() - start_poll) < 300: # 5 mins
                 time.sleep(10)
-                status_res = requests.get(f"{url}/{render_id}", headers=headers).json()
-                if status_res.get('status') == 'succeeded':
+                status_res = requests.get(f"{renders_status_url}/{render_id}", headers=headers).json()
+                current_status = status_res.get('status')
+                logger.info(f"   Estado render: {current_status}")
+                if current_status == 'succeeded':
                     logger.info(f"✨ ¡VICTORIA! Video completo: {status_res['url']}")
                     return status_res['url']
-                elif status_res.get('status') == 'failed':
+                elif current_status == 'failed':
                     logger.warning(f"⚠️ Falló Intento 1: {status_res.get('errorMessage')}")
                     break
         else:
-            logger.warning(f"⚠️ Error API en Intento 1 ({res.status_code})")
+            logger.warning(f"⚠️ Error API en Intento 1 ({res.status_code}): {res.text[:300]}")
             
         # INTENTO 2: Fallback Básico (Solo Video, sin transcripción)
         logger.info("🔄 Intento 2: Renderizado básico de emergencia (sin subtítulos)...")
         payload_safe = create_payload(False)
         res_safe = requests.post(url, headers=headers, json=payload_safe)
+        logger.info(f"📡 Respuesta Creatomate (Intento 2): {res_safe.status_code} - {res_safe.text[:200]}")
         
         if res_safe.status_code in [200, 202]:
             render_id_safe = res_safe.json()[0]['id']
@@ -499,11 +510,13 @@ def render_viral_video(video_id, analysis):
             start_poll = time.time()
             while (time.time() - start_poll) < 300:
                 time.sleep(10)
-                status_res = requests.get(f"{url}/{render_id_safe}", headers=headers).json()
-                if status_res.get('status') == 'succeeded':
+                status_res = requests.get(f"{renders_status_url}/{render_id_safe}", headers=headers).json()
+                current_status = status_res.get('status')
+                logger.info(f"   Estado render: {current_status}")
+                if current_status == 'succeeded':
                     logger.info(f"✨ ¡ÉXITO (Rescate)! Video básico: {status_res['url']}")
                     return status_res['url']
-                elif status_res.get('status') == 'failed':
+                elif current_status == 'failed':
                     logger.error(f"❌ Falló hasta el intento de rescate: {status_res.get('errorMessage')}")
                     break
 
