@@ -304,7 +304,7 @@ def get_direct_video_url(youtube_url):
     para sortear el bloqueo de IPs de GitHub Actions.
     """
     logger.info(f"🔗 Extrayendo URL directa de: {youtube_url} (Motor yt-dlp v12.0)...")
-    
+
     import tempfile
 
     try:
@@ -313,7 +313,8 @@ def get_direct_video_url(youtube_url):
         ydl_opts = {
             'quiet': True,
             'no_warnings': True,
-            'format': 'bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+            # Con ffmpeg disponible, combinar mejor vídeo h264 + audio m4a
+            'format': 'bestvideo[vcodec^=avc][height<=1080]+bestaudio[ext=m4a]/bestvideo[height<=1080]+bestaudio/best',
             'skip_download': True,
         }
 
