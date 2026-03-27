@@ -506,72 +506,96 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
 
         logger.error(f"❌ Todos los player_clients fallaron. Último error: {last_err}")
         
-        # v13.4 FIX: Fallbacks definitivos (Cobalt v10 + Piped HLS) 
-        logger.info("🔄 Intentando fallbacks proxy para bypasear 'Sign in to confirm you're not a bot'...")
+        # v13.5 FIX: Fallback SUPER DEFINITIVO vía Piped API (Progressive / DASH)
+        logger.info("🔄 yt-dlp bloqueado. Intentando fallback extremo con Piped API proxy...")
         try:
             import requests
             import subprocess
             
-            headers = {
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-            }
+            piped_instances = [
+                "https://pipedapi.kavin.rocks",
+                "https://pipedapi.tokhmi.xyz",
+                "https://pipedapi.smnz.de",
+                "https://piped-api.garudalinux.org"
+            ]
+            
+            video_id = youtube_url.split("v=")[-1].split("&")[0]
             
             direct_url = None
+            v_url = None
+            a_url = None
             
-            # --- FALLBACK 1: COBALT API (v10) ---
-            try:
-                # El nuevo endpoint de Cobalt es / y la propiedad es videoQuality
-                payload = {"url": youtube_url, "videoQuality": "720"}
-                resp = requests.post("https://api.cobalt.tools/", json=payload, headers=headers, timeout=15)
-                if resp.status_code in (200, 202):
-                    data = resp.json()
-                    direct_url = data.get("url")
-                    if direct_url:
-                        logger.info("✅ Enlace de video directo obtenido de Cobalt v10.")
-                else:
-                    logger.warning(f"⚠️ Cobalt devolvió {resp.status_code}: {resp.text[:100]}")
-            except Exception as e:
-                logger.warning(f"⚠️ Petición a Cobalt falló: {e}")
-
-            # --- FALLBACK 2: PIPED API (HLS PROXY) ---
-            if not direct_url:
-                logger.info("🔄 Cobalt no devolvió el clip. Intentando con Piped API (HLS Proxy)...")
+            for p_inst in piped_instances:
                 try:
-                    video_id = youtube_url.split("v=")[-1].split("&")[0]
-                    resp = requests.get(f"https://pipedapi.kavin.rocks/streams/{video_id}", timeout=15)
+                    resp = requests.get(f"{p_inst}/streams/{video_id}", timeout=15)
                     if resp.status_code == 200:
                         data = resp.json()
-                        hls_url = data.get("hls")
-                        if hls_url:
-                            direct_url = hls_url
-                            logger.info("✅ Enlace HLS obtenido de Piped API.")
-                        else:
-                            logger.warning("⚠️ Piped no devolvió un stream HLS. Falló.")
+                        
+                        # 1. HLS Stream (Livestreams)
+                        if data.get("hls"):
+                            direct_url = data.get("hls")
+                            logger.info(f"✅ HLS stream obtenido de {p_inst}")
+                            break
+                            
+                        # 2. Progressive MP4 (Video + Audio combinados)
+                        for s in data.get("videoStreams", []):
+                            # videoOnly == False significa que trae audio!
+                            if s.get("videoOnly") is False:
+                                direct_url = s.get("url")
+                                logger.info(f"✅ Progressive MP4 ({s.get('quality')}) obtenido de {p_inst}")
+                                break
+                        
+                        if direct_url: break
+                        
+                        # 3. DASH Streams (Video y Audio separados) - El estándar de YouTube ahora
+                        for s in data.get("videoStreams", []):
+                            if s.get("quality") in ("1080p", "720p"):
+                                v_url = s.get("url")
+                                break
+                        if not v_url and data.get("videoStreams"):
+                            v_url = data.get("videoStreams")[0].get("url")
+                            
+                        if data.get("audioStreams"):
+                            a_url = data.get("audioStreams")[0].get("url")
+                            
+                        if v_url and a_url:
+                            logger.info(f"✅ DASH (Video + Audio separados) obtenidos de {p_inst}")
+                            break
                 except Exception as e:
-                    logger.warning(f"⚠️ Petición a Piped falló: {e}")
+                    logger.warning(f"⚠️ {p_inst} falló: {e}")
+
+            duration_str = str(float(end) - float(start))
+            start_str = str(float(start))
 
             # --- DESCARGA/CORTE CON FFMPEG ---
             if direct_url:
-                logger.info("✂️ FFMPEG descargando y recortando desde la URL proxy remota...")
-                # Reducimos los logs de ffmpeg
+                logger.info("✂️ FFMPEG recortando remotamente el stream unificado...")
                 subprocess.run([
                     "ffmpeg", "-y", 
-                    "-user_agent", headers["User-Agent"],
-                    "-ss", str(float(start)), 
+                    "-ss", start_str, 
                     "-i", direct_url, 
-                    "-t", str(float(end) - float(start)), 
+                    "-t", duration_str, 
                     "-c:v", "copy", "-c:a", "copy", out_path
                 ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
-                if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
-                    logger.info(f"✅ Clip extraído vía Proxy Fallback: {out_path} ({os.path.getsize(out_path)//1024} KB)")
-                    return out_path
-                else:
-                    logger.error("❌ FFMPEG descargó un archivo vacío o falló.")
+            elif v_url and a_url:
+                logger.info("✂️ FFMPEG fusionando y recortando remotamente DASH streams...")
+                subprocess.run([
+                    "ffmpeg", "-y", 
+                    "-ss", start_str, "-i", v_url, 
+                    "-ss", start_str, "-i", a_url, 
+                    "-t", duration_str, 
+                    "-c:v", "copy", "-c:a", "aac", out_path
+                ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
                 logger.error("❌ Ningún proxy backend pudo resolver la descarga de video.")
+                return None
+                
+            if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
+                logger.info(f"✅ Clip extraído vía Piped Proxy: {out_path} ({os.path.getsize(out_path)//1024} KB)")
+                return out_path
+            else:
+                logger.error("❌ FFMPEG descargó un archivo vacío o falló.")
                 
         except Exception as p_err:
             logger.error(f"❌ Fallback fatal: {p_err}")
