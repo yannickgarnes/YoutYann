@@ -17,3 +17,6 @@ ffmpeg_unzipped/
 # Temp files
 temp_audio.mp3
 final_short.mp4
+clip_download.mp4
+clip_download.*
+*.txt.tmp

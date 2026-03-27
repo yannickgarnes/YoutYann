@@ -1,10 +1,16 @@
-name: Viral Shorts Factory
+name: Viral Shorts Factory v13.0
 
-# Trigger: Schedule
+# Trigger: Schedule + manual
 on:
   schedule:
+    # 13:00, 18:00, 21:00 UTC (prime time España + US East Coast)
     - cron: "0 13,18,21 * * *"
   workflow_dispatch:
+    inputs:
+      lang_mode:
+        description: "Idioma canales: ES | EN | BOTH"
+        required: false
+        default: "BOTH"
 
 jobs:
   viral_bot_job:
@@ -12,30 +18,51 @@ jobs:
 
     steps:
       - name: Checkout del código
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
 
-      - name: Configurar Python
-        uses: actions/setup-python@v4
+      - name: Configurar Python 3.11
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Instalar librerías
-        run: |
-          pip install -r requirements.txt
+      - name: Instalar dependencias Python
+        run: pip install -r requirements.txt
 
-      - name: Debug Variables (Oculto)
-        run: |
-          echo "Check Env Vars..."
-          if [ -z "$YOUTUBE_API_KEY" ]; then echo "❌ YOUTUBE_API_KEY VACIO"; else echo "✅ YOUTUBE_API_KEY OK"; fi
-        env:
-          YOUTUBE_API_KEY: "${{ secrets.YOUTUBE_API_KEY }}"
+      - name: Instalar ffmpeg (necesario para yt-dlp --download-sections)
+        run: sudo apt-get install -y ffmpeg
 
-      - name: EJECUTAR BOT VIRAL (v5.0 API ONLY)
+      - name: Verificar variables de entorno
+        run: |
+          echo "=== Verificando Secrets ==="
+          [ -z "$YOUTUBE_API_KEY" ]      && echo "❌ YOUTUBE_API_KEY VACÍO"      || echo "✅ YOUTUBE_API_KEY OK"
+          [ -z "$GEMINI_API_KEY" ]       && echo "❌ GEMINI_API_KEY VACÍO"       || echo "✅ GEMINI_API_KEY OK"
+          [ -z "$CREATOMATE_API_KEY" ]   && echo "❌ CREATOMATE_API_KEY VACÍO"   || echo "✅ CREATOMATE_API_KEY OK"
+          [ -z "$YOUTUBE_TOKEN_JSON" ]   && echo "❌ YOUTUBE_TOKEN_JSON VACÍO"   || echo "✅ YOUTUBE_TOKEN_JSON OK"
+          [ -z "$YOUTUBE_COOKIES" ]      && echo "⚠️ YOUTUBE_COOKIES no configurado (yt-dlp puede fallar)" || echo "✅ YOUTUBE_COOKIES OK"
+          echo "🌍 LANG_MODE: $LANG_MODE"
         env:
-          YOUTUBE_API_KEY: "${{ secrets.YOUTUBE_API_KEY }}"
-          GEMINI_API_KEY: "${{ secrets.GEMINI_API_KEY }}"
+          YOUTUBE_API_KEY:    "${{ secrets.YOUTUBE_API_KEY }}"
+          GEMINI_API_KEY:     "${{ secrets.GEMINI_API_KEY }}"
           CREATOMATE_API_KEY: "${{ secrets.CREATOMATE_API_KEY }}"
-          CREATOMATE_TEMPLATE_ID: "${{ secrets.CREATOMATE_TEMPLATE_ID }}"
           YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
-        run: |
-          python viral_bot.py
+          YOUTUBE_COOKIES:    "${{ secrets.YOUTUBE_COOKIES }}"
+          LANG_MODE:          "${{ github.event.inputs.lang_mode || 'BOTH' }}"
+
+      - name: Ejecutar YoutYann Bot v13.0
+        env:
+          YOUTUBE_API_KEY:       "${{ secrets.YOUTUBE_API_KEY }}"
+          GEMINI_API_KEY:        "${{ secrets.GEMINI_API_KEY }}"
+          CREATOMATE_API_KEY:    "${{ secrets.CREATOMATE_API_KEY }}"
+          CREATOMATE_TEMPLATE_ID: "${{ secrets.CREATOMATE_TEMPLATE_ID }}"
+          YOUTUBE_TOKEN_JSON:    ${{ secrets.YOUTUBE_TOKEN_JSON }}
+          YOUTUBE_COOKIES:       "${{ secrets.YOUTUBE_COOKIES }}"
+          LANG_MODE:             "${{ github.event.inputs.lang_mode || 'BOTH' }}"
+        run: python viral_bot.py
+
+      - name: Guardar cache de IDs procesados
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: processed-ids-cache
+          path: processed_ids.json
+          retention-days: 30
