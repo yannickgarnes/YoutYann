@@ -476,17 +476,7 @@ def get_direct_video_url(youtube_url: str) -> str:
 
     logger.warning("⚠️ No se pudo resolver URL directa. Usando URL original de Youtube como último recurso.")
     return youtube_url
-    logger.error("❌ yt-dlp no instalado. Añádelo a requirements.txt")
-        return None
-    except Exception as e:
-        logger.error(f"❌ Error descargando clip: {e}")
-        return None
-    finally:
-        if cookie_file:
-            try:
-                os.unlink(cookie_file)
-            except Exception:
-                pass
+
 
 
 # ---------------------------------------------------------------------------
