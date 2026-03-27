@@ -418,249 +418,65 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
     else:
         logger.warning("⚠️ YOUTUBE_COOKIES no definido. Si falla, configura este secret.")
 
-    out_path = str(BASE_DIR / "clip_download.mp4")
-
-    # Eliminar archivo previo si existe
-    if os.path.exists(out_path):
-        os.remove(out_path)
-
-    # Formatear sección en HH:MM:SS
-    def _to_hms(sec: float) -> str:
-        s = int(sec)
-        return f"{s // 3600:02}:{(s % 3600) // 60:02}:{s % 60:02}"
-
-    section = f"*{_to_hms(start)}-{_to_hms(end)}"
-
-    try:
-        import yt_dlp
-
-        # v13.9 FIX: usar clientes tv/mweb que NO requieren Attestation (Integrity Token)
-        # (android e ios lo exigen desde 2025/2026 y youtube los banea si usamos yt-dlp)
-        PLAYER_CLIENTS = ["tv", "mweb", "tv_embedded", "web"]
-
-        last_err = None
-        for client in PLAYER_CLIENTS:
-            logger.info(f"🎬 Intentando descarga nativa con player_client={client}...")
-
-            # Limpiar archivo previo entre intentos
-            for f in BASE_DIR.glob("clip_download.*"):
-                try:
-                    f.unlink()
-                except Exception:
-                    pass
-
-            ydl_opts = {
-                "quiet": False,
-                "no_warnings": False,
-                # Formato MP4 con audio — fallback progresivo
-                "format": (
-                    "bestvideo[ext=mp4][vcodec^=avc][height<=1080]"
-                    "+bestaudio[ext=m4a]"
-                    "/bestvideo[ext=mp4]+bestaudio"
-                    "/best[ext=mp4]"
-                    "/best"
-                ),
-                "outtmpl": str(BASE_DIR / "clip_download.%(ext)s"),
-                "download_sections": [{"section": section}],
-                "force_keyframes_at_cuts": True,
-                "merge_output_format": "mp4",
-                "extractor_args": {
-                    "youtube": {
-                        "player_client": [client],
-                    }
-                },
-            }
-
-            # Solo el cliente web soporta cookies. Android/iOS/TV se saltarán si pasamos cookies
-            if cookie_file and client == "web":
-                ydl_opts["cookiefile"] = cookie_file
-
-            try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                    ydl.download([youtube_url])
-            except Exception as e:
-                last_err = e
-                logger.warning(f"⚠️ player_client={client} falló: {e}")
-                continue
-
-            # Buscar el archivo resultante (yt-dlp puede variar la extensión)
-            candidates = sorted(BASE_DIR.glob("clip_download.*"))
-            mp4_file = next(
-                (f for f in candidates if f.suffix.lower() == ".mp4"),
-                candidates[0] if candidates else None,
-            )
-
-            if mp4_file and mp4_file.exists() and mp4_file.stat().st_size > 1000:
-                # Renombrar a out_path canónico si es diferente
-                if str(mp4_file) != out_path:
-                    mp4_file.rename(out_path)
-                logger.info(
-                    f"✅ Clip descargado con '{client}': "
-                    f"{out_path} ({os.path.getsize(out_path)//1024} KB)"
-                )
-                return out_path
-
-            logger.warning(f"⚠️ player_client={client}: archivo vacío o no encontrado.")
-            last_err = Exception("Archivo vacío")
-
-        logger.error(f"❌ Todos los player_clients de yt-dlp fallaron. Último error: {last_err}")
-        
-        # v13.9 FIX: RED DESCENTRALIZADA AUTOCURATIVA
-        logger.info("🔄 yt-dlp bloqueado puramente por IP. Iniciando Proxy Network Dinámica...")
+# ---------------------------------------------------------------------------
+# v14.2 HYBRID PROXY RESOLVER (No Download on GitHub)
+# ---------------------------------------------------------------------------
+def get_direct_video_url(youtube_url: str) -> str:
+    """
+    Busca un enlace directo de streaming (.mp4 / .m3u8) usando la red
+    descentralizada Proxy (Invidious, Piped, Cobalt).
+    Esto evita que Creatomate falle intentando extraerlo él mismo.
+    """
+    video_id = youtube_url.split("v=")[-1].split("&")[0]
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
+    # 1. INVIDIOUS (Preferido: Bypass total)
+    logger.info("📡 Resolviendo URL directa vía Invidious Proxy...")
+    inv_instances = ["https://yewtu.be", "https://invidious.jing.rocks", "https://vid.puffyan.us", "https://inv.tux.pizza"]
+    random.shuffle(inv_instances)
+    for inst in inv_instances:
         try:
-            headers = {
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            }
-            
-            direct_url = None
-            v_url = None
-            a_url = None
+            r = requests.get(f"{inst}/api/v1/videos/{video_id}", headers=headers, timeout=8)
+            if r.status_code == 200:
+                data = r.json()
+                streams = data.get("formatStreams", [])
+                itag = streams[0].get("itag") if streams else "22"
+                direct = f"{inst}/latest_version?id={video_id}&itag={itag}&local=true"
+                logger.info(f"✅ URL Invidious obtenida: {inst}")
+                return direct
+        except: continue
 
-            # --- FALLBACK 1: INVIDIOUS API (Proxy Nativo) ---
-            logger.info("📡 Buscando streaming proxy a través de redes descentralizadas Invidious...")
-            video_id = youtube_url.split("v=")[-1].split("&")[0]
-            
-            invidious_instances = [
-                "https://yewtu.be",
-                "https://vid.puffyan.us",
-                "https://invidious.jing.rocks",
-                "https://inv.tux.pizza",
-                "https://invidious.lunar.icu",
-                "https://invidious.protokolla.fi"
-            ]
-            random.shuffle(invidious_instances)
-            
-            for inv_inst in invidious_instances:
-                try:
-                    resp = requests.get(f"{inv_inst}/api/v1/videos/{video_id}", headers=headers, timeout=10)
-                    if resp.status_code == 200:
-                        data = resp.json()
-                        format_streams = data.get("formatStreams", [])
-                        
-                        selected_itag = None
-                        for f in format_streams:
-                            if f.get("resolution") in ("720p", "1080p", "480p", "360p"):
-                                selected_itag = f.get("itag")
-                                break
-                        
-                        if not selected_itag and format_streams:
-                            selected_itag = format_streams[0].get("itag")
-                        
-                        if selected_itag:
-                            # Proxy manual: El nodo Invidious descarga de Google y lo re-streamea a nuestra IP (bypasseando el ban de GH Actions)
-                            direct_url = f"{inv_inst}/latest_version?id={video_id}&itag={selected_itag}&local=true"
-                            logger.info(f"✅ Invidious Proxy Stream encontrado en {inv_inst} (itag={selected_itag})")
-                            break
-                    else:
-                        logger.debug(f"Invidious {inv_inst} HTTP {resp.status_code}")
-                except Exception as e:
-                    continue
+    # 2. PIPED API
+    logger.info("📡 Invidious falló. Probando red Piped...")
+    piped_instances = ["https://pipedapi.kavin.rocks", "https://pi.ggtyler.dev/api", "https://pipedapi.drgns.space"]
+    random.shuffle(piped_instances)
+    for inst in piped_instances:
+        try:
+            r = requests.get(f"{inst}/streams/{video_id}", headers=headers, timeout=8)
+            if r.status_code == 200:
+                data = r.json()
+                if data.get("hls"): return data["hls"]
+                for s in data.get("videoStreams", []):
+                    if not s.get("videoOnly"): return s["url"]
+        except: continue
 
-            # --- FALLBACK 2: PIPED API (RED DINÁMICA SIN CLOUDFLARE) ---
-            if not direct_url:
-                logger.info("📡 Invidious falló. Buscando lista fresca de nodos Piped puros (sin CDN)...")
-                piped_instances = []
-                try:
-                    r = requests.get("https://raw.githubusercontent.com/TeamPiped/Piped-Instances/main/instances.json", timeout=10)
-                    if r.status_code == 200:
-                        clean_nodes = [i["api_url"] for i in r.json() if i.get("api_url") and not i.get("cdn", False)]
-                        random.shuffle(clean_nodes)
-                        piped_instances = clean_nodes[:15]
-                        logger.info(f"🌐 Cargados {len(piped_instances)} nodos Piped limpios.")
-                except Exception:
-                    pass
-                    
-                if not piped_instances:
-                    piped_instances = ["https://pipedapi.kavin.rocks", "https://pi.ggtyler.dev/api", "https://pipedapi.drgns.space"]
-                
-                for p_inst in piped_instances:
-                    try:
-                        resp = requests.get(f"{p_inst}/streams/{video_id}", headers=headers, timeout=10)
-                        if resp.status_code == 200:
-                            data = resp.json()
-                            if data.get("hls"):
-                                direct_url = data.get("hls")
-                                break
-                            for s in data.get("videoStreams", []):
-                                if s.get("videoOnly") is False:
-                                    direct_url = s.get("url")
-                                    break
-                            if direct_url: break
-                            for s in data.get("videoStreams", []):
-                                if s.get("quality") in ("1080p", "720p", "480p"):
-                                    v_url = s.get("url")
-                                    break
-                            if not v_url and data.get("videoStreams"):
-                                v_url = data.get("videoStreams")[0].get("url")
-                            if data.get("audioStreams"):
-                                a_url = data.get("audioStreams")[0].get("url")
-                            if v_url and a_url:
-                                break
-                        else:
-                            logger.info(f"⚠️ Piped {p_inst} bloqueado (HTTP {resp.status_code})")
-                    except Exception as e:
-                        continue
-                    if direct_url or (v_url and a_url):
-                        logger.info(f"✅ Stream resuelto por Piped {p_inst}")
-                        break
+    # 3. COBALT API
+    logger.info("📡 Piped falló. Probando Cobalt...")
+    cob_instances = ["https://cobalt.twi.cx/", "https://api.cobalt.tools/"]
+    for inst in cob_instances:
+        try:
+            r = requests.post(inst, json={"url": youtube_url, "videoQuality": "720"}, headers=headers, timeout=8)
+            if r.status_code in (200, 202):
+                url = r.json().get("url")
+                if url: return url
+        except: continue
 
-            # --- FALLBACK 3: COBALT API ---
-            if not direct_url and not (v_url and a_url):
-                logger.info("🔄 Piped no resolvió. Intentando Cobalt...")
-                cobalt_instances = ["https://cobalt.twi.cx/", "https://co.eepy.today/", "https://api.cobalt.tools/", "https://dl.woof.is/"]
-                for instance in cobalt_instances:
-                    try:
-                        payload = {"url": youtube_url, "videoQuality": "720"}
-                        resp = requests.post(instance, json=payload, headers=headers, timeout=10)
-                        if resp.status_code in (200, 202):
-                            data = resp.json()
-                            direct_url = data.get("url")
-                            if direct_url:
-                                logger.info(f"✅ Enlace directo de Cobalt ({instance})")
-                                break
-                    except Exception:
-                        pass
-                        
-            # --- CORTE FINAL FFMPEG ---
-            duration_str = str(float(end) - float(start))
-            start_str = str(float(start))
-
-            if direct_url:
-                logger.info("✂️ FFMPEG descargando y recortando remotamente...")
-                subprocess.run([
-                    "ffmpeg", "-y", 
-                    "-user_agent", headers["User-Agent"], "-headers", "Accept: */*",
-                    "-ss", start_str, "-i", direct_url, 
-                    "-t", duration_str, "-c:v", "copy", "-c:a", "copy", out_path
-                ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                
-            elif v_url and a_url:
-                logger.info("✂️ Fusionando DASH en tiempo real remotamente (ffmpeg)...")
-                subprocess.run([
-                    "ffmpeg", "-y", 
-                    "-user_agent", headers["User-Agent"], "-headers", "Accept: */*", "-ss", start_str, "-i", v_url, 
-                    "-user_agent", headers["User-Agent"], "-headers", "Accept: */*", "-ss", start_str, "-i", a_url, 
-                    "-t", duration_str, "-c:v", "copy", "-c:a", "aac", out_path
-                ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            else:
-                logger.error("❌ La red distribuida entera se quedó sin nodos servidores vivos para este video.")
-                return None
-                
-            if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
-                logger.info(f"✅ EXTRACCIÓN MAESTRA COMPLETADA: {out_path} ({os.path.getsize(out_path)//1024} KB)")
-                return out_path
-            else:
-                logger.error("❌ FFMPEG grabó un archivo corrupto al final (los proxies devolvieron streams caídos).")
-                
-        except Exception as p_err:
-            logger.error(f"❌ Catástrofe en la red Proxy: {p_err}")
-
-        return None
-
-    except ImportError:
-        logger.error("❌ yt-dlp no instalado. Añádelo a requirements.txt")
+    logger.warning("⚠️ No se pudo resolver URL directa. Usando URL original de Youtube como último recurso.")
+    return youtube_url
+    logger.error("❌ yt-dlp no instalado. Añádelo a requirements.txt")
         return None
     except Exception as e:
         logger.error(f"❌ Error descargando clip: {e}")
@@ -1016,9 +832,11 @@ def main():
         f"Motivo: {analysis.get('summary', 'N/A')}"
     )
 
-    # 3. v14.0 CLOUD EXTRACTION: Bypasseamos la descarga local para evitar el ban de IP de GitHub
-    # Enviamos directamente la URL de YouTube a Creatomate.
-    final_video_url = render_viral_video(video_data["url"], analysis)
+    # 3. v14.2 HYBRID CLOUD EXTRACTION: Resolvemos el stream byte-link con proxies
+    # y enviamos ESE link directo a Creatomate. Esto evita fallos de extracción en el render.
+    source_url = get_direct_video_url(video_data["url"])
+    
+    final_video_url = render_viral_video(source_url, analysis)
     if not final_video_url:
         logger.error("💀 Creatomate no pudo renderizar el vídeo (o falló el cloud-download). Abortando.")
         return
