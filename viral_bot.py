@@ -506,8 +506,8 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
 
         logger.error(f"❌ Todos los player_clients fallaron. Último error: {last_err}")
         
-        # v13.2 FIX: Fallback a Cobalt API si yt-dlp está bloqueado por IP (Sign in to confirm you're not a bot)
-        logger.info("🔄 Intentando fallback extremo con Cobalt API (anti-ban proxy)...")
+        # v13.4 FIX: Fallbacks definitivos (Cobalt v10 + Piped HLS) 
+        logger.info("🔄 Intentando fallbacks proxy para bypasear 'Sign in to confirm you're not a bot'...")
         try:
             import requests
             import subprocess
@@ -515,36 +515,47 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
             headers = {
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
             }
             
-            cobalt_instances = [
-                "https://co.wuk.sh/api/json", 
-                "https://cobalt.api.zmate.net/api/json",
-                "https://api.cobalt.tools/api/json"
-            ]
-            
             direct_url = None
-            for instance in cobalt_instances:
-                try:
-                    payload = {"url": youtube_url, "vQuality": "720"}
-                    resp = requests.post(instance, json=payload, headers=headers, timeout=15)
-                    if hasattr(resp, "status_code") and resp.status_code == 200:
-                        data = resp.json()
-                        if "url" in data:
-                            direct_url = data["url"]
-                            logger.info(f"✅ Enlace directo obtenido de Cobalt ({instance})")
-                            break
-                        else:
-                            logger.warning(f"⚠️ Cobalt ({instance}) no devolvió URL: {data}")
-                    else:
-                        logger.warning(f"⚠️ Cobalt ({instance}) devolvió status {getattr(resp, 'status_code', 'N/A')}")
-                except Exception as e:
-                    logger.warning(f"⚠️ Instancia {instance} falló: {e}")
             
+            # --- FALLBACK 1: COBALT API (v10) ---
+            try:
+                # El nuevo endpoint de Cobalt es / y la propiedad es videoQuality
+                payload = {"url": youtube_url, "videoQuality": "720"}
+                resp = requests.post("https://api.cobalt.tools/", json=payload, headers=headers, timeout=15)
+                if resp.status_code in (200, 202):
+                    data = resp.json()
+                    direct_url = data.get("url")
+                    if direct_url:
+                        logger.info("✅ Enlace de video directo obtenido de Cobalt v10.")
+                else:
+                    logger.warning(f"⚠️ Cobalt devolvió {resp.status_code}: {resp.text[:100]}")
+            except Exception as e:
+                logger.warning(f"⚠️ Petición a Cobalt falló: {e}")
+
+            # --- FALLBACK 2: PIPED API (HLS PROXY) ---
+            if not direct_url:
+                logger.info("🔄 Cobalt no devolvió el clip. Intentando con Piped API (HLS Proxy)...")
+                try:
+                    video_id = youtube_url.split("v=")[-1].split("&")[0]
+                    resp = requests.get(f"https://pipedapi.kavin.rocks/streams/{video_id}", timeout=15)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        hls_url = data.get("hls")
+                        if hls_url:
+                            direct_url = hls_url
+                            logger.info("✅ Enlace HLS obtenido de Piped API.")
+                        else:
+                            logger.warning("⚠️ Piped no devolvió un stream HLS. Falló.")
+                except Exception as e:
+                    logger.warning(f"⚠️ Petición a Piped falló: {e}")
+
+            # --- DESCARGA/CORTE CON FFMPEG ---
             if direct_url:
-                logger.info("✂️ FFMPEG descargando y recortando directamente desde la URL remota...")
-                # ffmpeg recorta remotamente. Pasamos User-Agent para que el servidor de video no corte la conexión.
+                logger.info("✂️ FFMPEG descargando y recortando desde la URL proxy remota...")
+                # Reducimos los logs de ffmpeg
                 subprocess.run([
                     "ffmpeg", "-y", 
                     "-user_agent", headers["User-Agent"],
@@ -555,12 +566,15 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
                 ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
                 if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
-                    logger.info(f"✅ Clip extraído vía Cobalt: {out_path} ({os.path.getsize(out_path)//1024} KB)")
+                    logger.info(f"✅ Clip extraído vía Proxy Fallback: {out_path} ({os.path.getsize(out_path)//1024} KB)")
                     return out_path
+                else:
+                    logger.error("❌ FFMPEG descargó un archivo vacío o falló.")
             else:
-                logger.error("❌ Ninguna instancia de Cobalt pudo obtener el video.")
+                logger.error("❌ Ningún proxy backend pudo resolver la descarga de video.")
+                
         except Exception as p_err:
-            logger.error(f"❌ Fallback Cobalt falló fatalmente: {p_err}")
+            logger.error(f"❌ Fallback fatal: {p_err}")
 
         return None
 
