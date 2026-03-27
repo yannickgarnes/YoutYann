@@ -518,25 +518,63 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
             v_url = None
             a_url = None
 
-            # --- FALLBACK 1: PIPED API (RED DINÁMICA SIN CLOUDFLARE) ---
-            logger.info("📡 Obteniendo lista fresca de nodos Piped globales (sin Cloudflare)...")
-            piped_instances = []
-            try:
-                r = requests.get("https://raw.githubusercontent.com/TeamPiped/Piped-Instances/main/instances.json", timeout=10)
-                if r.status_code == 200:
-                    # Filtramos las que tienen cdn: true (son las que tiran código HTML 403 Expecting Value por los captchas)
-                    clean_nodes = [i["api_url"] for i in r.json() if i.get("api_url") and not i.get("cdn", False)]
-                    random.shuffle(clean_nodes)
-                    piped_instances = clean_nodes[:15] # Probamos 15 aleatorias crudas
-                    logger.info(f"🌐 Cargados {len(piped_instances)} nodos Piped puros limpios.")
-            except Exception as e:
-                logger.warning(f"⚠️ Falló carga dinámica de nodos Piped: {e}")
-                
-            if not piped_instances:
-                piped_instances = ["https://pipedapi.kavin.rocks", "https://pi.ggtyler.dev/api", "https://pipedapi.drgns.space"]
+            # --- FALLBACK 1: INVIDIOUS API (Proxy Nativo) ---
+            logger.info("📡 Buscando streaming proxy a través de redes descentralizadas Invidious...")
+            video_id = youtube_url.split("v=")[-1].split("&")[0]
             
-            try:
-                video_id = youtube_url.split("v=")[-1].split("&")[0]
+            invidious_instances = [
+                "https://yewtu.be",
+                "https://vid.puffyan.us",
+                "https://invidious.jing.rocks",
+                "https://inv.tux.pizza",
+                "https://invidious.lunar.icu",
+                "https://invidious.protokolla.fi"
+            ]
+            random.shuffle(invidious_instances)
+            
+            for inv_inst in invidious_instances:
+                try:
+                    resp = requests.get(f"{inv_inst}/api/v1/videos/{video_id}", headers=headers, timeout=10)
+                    if resp.status_code == 200:
+                        data = resp.json()
+                        format_streams = data.get("formatStreams", [])
+                        
+                        selected_itag = None
+                        for f in format_streams:
+                            if f.get("resolution") in ("720p", "1080p", "480p", "360p"):
+                                selected_itag = f.get("itag")
+                                break
+                        
+                        if not selected_itag and format_streams:
+                            selected_itag = format_streams[0].get("itag")
+                        
+                        if selected_itag:
+                            # Proxy manual: El nodo Invidious descarga de Google y lo re-streamea a nuestra IP (bypasseando el ban de GH Actions)
+                            direct_url = f"{inv_inst}/latest_version?id={video_id}&itag={selected_itag}&local=true"
+                            logger.info(f"✅ Invidious Proxy Stream encontrado en {inv_inst} (itag={selected_itag})")
+                            break
+                    else:
+                        logger.debug(f"Invidious {inv_inst} HTTP {resp.status_code}")
+                except Exception as e:
+                    continue
+
+            # --- FALLBACK 2: PIPED API (RED DINÁMICA SIN CLOUDFLARE) ---
+            if not direct_url:
+                logger.info("📡 Invidious falló. Buscando lista fresca de nodos Piped puros (sin CDN)...")
+                piped_instances = []
+                try:
+                    r = requests.get("https://raw.githubusercontent.com/TeamPiped/Piped-Instances/main/instances.json", timeout=10)
+                    if r.status_code == 200:
+                        clean_nodes = [i["api_url"] for i in r.json() if i.get("api_url") and not i.get("cdn", False)]
+                        random.shuffle(clean_nodes)
+                        piped_instances = clean_nodes[:15]
+                        logger.info(f"🌐 Cargados {len(piped_instances)} nodos Piped limpios.")
+                except Exception:
+                    pass
+                    
+                if not piped_instances:
+                    piped_instances = ["https://pipedapi.kavin.rocks", "https://pi.ggtyler.dev/api", "https://pipedapi.drgns.space"]
+                
                 for p_inst in piped_instances:
                     try:
                         resp = requests.get(f"{p_inst}/streams/{video_id}", headers=headers, timeout=10)
@@ -544,44 +582,34 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
                             data = resp.json()
                             if data.get("hls"):
                                 direct_url = data.get("hls")
-                                logger.info(f"✅ HLS fluido obtenido de {p_inst}")
                                 break
-                            
                             for s in data.get("videoStreams", []):
                                 if s.get("videoOnly") is False:
                                     direct_url = s.get("url")
-                                    logger.info(f"✅ MP4 progresivo obtenido de {p_inst}")
                                     break
                             if direct_url: break
-                            
                             for s in data.get("videoStreams", []):
                                 if s.get("quality") in ("1080p", "720p", "480p"):
                                     v_url = s.get("url")
                                     break
                             if not v_url and data.get("videoStreams"):
                                 v_url = data.get("videoStreams")[0].get("url")
-                                
                             if data.get("audioStreams"):
                                 a_url = data.get("audioStreams")[0].get("url")
-                                
                             if v_url and a_url:
-                                logger.info(f"✅ DASH dual crudo obtenido de {p_inst}")
                                 break
                         else:
-                            # Ignoramos silenciosamente si devuelve 5xx o 403 (Cloudflare o RateLimit) y pasamos al siguiente
-                            logger.debug(f"Piped {p_inst} devolvió HTTP {resp.status_code}")
+                            logger.info(f"⚠️ Piped {p_inst} bloqueado (HTTP {resp.status_code})")
                     except Exception as e:
                         continue
-                    
                     if direct_url or (v_url and a_url):
+                        logger.info(f"✅ Stream resuelto por Piped {p_inst}")
                         break
-            except Exception as e:
-                logger.warning(f"⚠️ Error general loop Piped: {e}")
 
-            # --- FALLBACK 2: COBALT API ---
+            # --- FALLBACK 3: COBALT API ---
             if not direct_url and not (v_url and a_url):
                 logger.info("🔄 Piped no resolvió. Intentando Cobalt...")
-                cobalt_instances = ["https://co.wuk.sh/", "https://cobalt.twi.cx/", "https://co.eepy.today/", "https://dl.woof.is/"]
+                cobalt_instances = ["https://cobalt.twi.cx/", "https://co.eepy.today/", "https://api.cobalt.tools/", "https://dl.woof.is/"]
                 for instance in cobalt_instances:
                     try:
                         payload = {"url": youtube_url, "videoQuality": "720"}
@@ -592,7 +620,7 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
                             if direct_url:
                                 logger.info(f"✅ Enlace directo de Cobalt ({instance})")
                                 break
-                    except Exception as e:
+                    except Exception:
                         pass
                         
             # --- CORTE FINAL FFMPEG ---
@@ -600,10 +628,10 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
             start_str = str(float(start))
 
             if direct_url:
-                logger.info("✂️ Recortando unificado mágico remotamente (ffmpeg)...")
+                logger.info("✂️ FFMPEG descargando y recortando remotamente...")
                 subprocess.run([
                     "ffmpeg", "-y", 
-                    "-user_agent", headers["User-Agent"],
+                    "-user_agent", headers["User-Agent"], "-headers", "Accept: */*",
                     "-ss", start_str, "-i", direct_url, 
                     "-t", duration_str, "-c:v", "copy", "-c:a", "copy", out_path
                 ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -612,8 +640,8 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
                 logger.info("✂️ Fusionando DASH en tiempo real remotamente (ffmpeg)...")
                 subprocess.run([
                     "ffmpeg", "-y", 
-                    "-user_agent", headers["User-Agent"], "-ss", start_str, "-i", v_url, 
-                    "-user_agent", headers["User-Agent"], "-ss", start_str, "-i", a_url, 
+                    "-user_agent", headers["User-Agent"], "-headers", "Accept: */*", "-ss", start_str, "-i", v_url, 
+                    "-user_agent", headers["User-Agent"], "-headers", "Accept: */*", "-ss", start_str, "-i", a_url, 
                     "-t", duration_str, "-c:v", "copy", "-c:a", "aac", out_path
                 ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
@@ -624,7 +652,7 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
                 logger.info(f"✅ EXTRACCIÓN MAESTRA COMPLETADA: {out_path} ({os.path.getsize(out_path)//1024} KB)")
                 return out_path
             else:
-                logger.error("❌ FFMPEG grabó un archivo corrupto al final (la instancia devolvió links rotos o geo-bloqueados).")
+                logger.error("❌ FFMPEG grabó un archivo corrupto al final (los proxies devolvieron streams caídos).")
                 
         except Exception as p_err:
             logger.error(f"❌ Catástrofe en la red Proxy: {p_err}")
