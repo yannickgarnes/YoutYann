@@ -29,7 +29,9 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Instalar ffmpeg (necesario para yt-dlp --download-sections)
-        run: sudo apt-get install -y ffmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --fix-missing ffmpeg
 
       - name: Verificar variables de entorno
         run: |
