@@ -515,11 +515,11 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
             headers = {
                 "Accept": "application/json",
                 "Content-Type": "application/json",
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             }
             
             cobalt_instances = [
-                "https://api.cobalt.tools/",
+                "https://co.wuk.sh/",
                 "https://cobalt.twi.cx/", 
                 "https://cobalt.envycast.net/",
                 "https://co.eepy.today/",
@@ -541,7 +541,7 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
                         data = resp.json()
                         direct_url = data.get("url")
                         if direct_url:
-                            logger.info(f"✅ Enlace directo obtenido de {instance}")
+                            logger.info(f"✅ Enlace de video directo obtenido de Cobalt ({instance})")
                             break
                     else:
                         logger.warning(f"⚠️ {instance} status {resp.status_code}: {resp.text[:50]}")
@@ -553,18 +553,20 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
                 logger.info("🔄 Cobalt no devolvió el clip. Intentando con múltiples nodos Piped API...")
                 piped_instances = [
                     "https://pipedapi.kavin.rocks",
-                    "https://pipedapi.us.projectsegfau.lt",
-                    "https://pipedapi.adminforge.de",
                     "https://pi.ggtyler.dev/api",
                     "https://pipedapi.drgns.space",
-                    "https://pipedapi.r4fo.com"
+                    "https://pipedapi.in.projectsegfau.lt",
+                    "https://api.piped.projectsegfau.lt",
+                    "https://pipedapi.moomoo.me",
+                    "https://pipedapi.syncpundit.io"
                 ]
                 
                 try:
                     video_id = youtube_url.split("v=")[-1].split("&")[0]
                     for p_inst in piped_instances:
                         try:
-                            resp = requests.get(f"{p_inst}/streams/{video_id}", timeout=10)
+                            # v13.8 FIX: Anadir headers a Piped para saltarte Cloudflare (403/521 html)
+                            resp = requests.get(f"{p_inst}/streams/{video_id}", headers=headers, timeout=10)
                             if resp.status_code == 200:
                                 data = resp.json()
                                 
