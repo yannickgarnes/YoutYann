@@ -512,6 +512,12 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
             import requests
             import subprocess
             
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+            }
+            
             cobalt_instances = [
                 "https://api.cobalt.tools/",
                 "https://cobalt.twi.cx/", 
@@ -530,20 +536,21 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
             for instance in cobalt_instances:
                 try:
                     payload = {"url": youtube_url, "videoQuality": "720"}
-                    # Algunas instancias de cobalt requieren que no lleve '/' final o viceversa, intentamos con lo que hay
                     resp = requests.post(instance, json=payload, headers=headers, timeout=10)
                     if resp.status_code in (200, 202):
                         data = resp.json()
                         direct_url = data.get("url")
                         if direct_url:
-                            logger.info(f"✅ Enlace de video directo obtenido de Cobalt ({instance})")
+                            logger.info(f"✅ Enlace directo obtenido de {instance}")
                             break
+                    else:
+                        logger.warning(f"⚠️ {instance} status {resp.status_code}: {resp.text[:50]}")
                 except Exception as e:
-                    pass
+                    logger.warning(f"⚠️ {instance} falló exc: {e}")
 
             # --- FALLBACK 2: PIPED API (HLS / DASH PROXY) ---
             if not direct_url:
-                logger.info("🔄 Cobalt no devolvió el clip. Intentando con múltiples nodos de Piped API...")
+                logger.info("🔄 Cobalt no devolvió el clip. Intentando con múltiples nodos Piped API...")
                 piped_instances = [
                     "https://pipedapi.kavin.rocks",
                     "https://pipedapi.us.projectsegfau.lt",
@@ -561,21 +568,18 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
                             if resp.status_code == 200:
                                 data = resp.json()
                                 
-                                # HLS
                                 if data.get("hls"):
                                     direct_url = data.get("hls")
-                                    logger.info(f"✅ HLS stream obtenido de {p_inst}")
+                                    logger.info(f"✅ HLS de {p_inst}")
                                     break
                                 
-                                # Progressive
                                 for s in data.get("videoStreams", []):
                                     if s.get("videoOnly") is False:
                                         direct_url = s.get("url")
-                                        logger.info(f"✅ Progressive MP4 ({s.get('quality')}) obtenido de {p_inst}")
+                                        logger.info(f"✅ Progressive MP4 de {p_inst}")
                                         break
                                 if direct_url: break
                                 
-                                # DASH
                                 for s in data.get("videoStreams", []):
                                     if s.get("quality") in ("1080p", "720p"):
                                         v_url = s.get("url")
@@ -587,15 +591,18 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
                                     a_url = data.get("audioStreams")[0].get("url")
                                     
                                 if v_url and a_url:
-                                    logger.info(f"✅ DASH (Video + Audio separados) obtenidos de {p_inst}")
+                                    logger.info(f"✅ DASH (Video+Audio) de {p_inst}")
                                     break
-                        except Exception:
+                            else:
+                                logger.warning(f"⚠️ {p_inst} HTTP {resp.status_code}: {resp.text[:50]}")
+                        except Exception as e:
+                            logger.warning(f"⚠️ {p_inst} error exc: {e}")
                             continue
                         
                         if direct_url or (v_url and a_url):
                             break
                 except Exception as e:
-                    logger.warning(f"⚠️ Error general en loop de Piped: {e}")
+                    logger.warning(f"⚠️ Error fatal en loop Piped: {e}")
 
             duration_str = str(float(end) - float(start))
             start_str = str(float(start))
