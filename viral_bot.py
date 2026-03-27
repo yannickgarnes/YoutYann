@@ -190,29 +190,25 @@ def get_youtube_credentials():
 # BUSCAR VÍDEO VIRAL
 # ---------------------------------------------------------------------------
 def search_trending_video():
-    """Busca el vídeo más viral de los canales configurados (últimos 14 días)."""
-    if not youtube:
-        logger.error("❌ YouTube client no disponible.")
-        return None
+    """Busca el clip más viral (SHORTS) de los canales configurados (últimos 14 días)."""
+    if not youtube: return None
 
     channels = CHANNELS_TO_WATCH[:]
     random.shuffle(channels)
     
-    logger.info(f"🔍 Buscando videos virales iterando canales...")
+    logger.info(f"🔍 Buscando SHORTS virales iterando canales...")
 
     for target_channel in channels:
-        logger.info(f"   ▶️ Buscando en: {target_channel}")
+        logger.info(f"   ▶️ Buscando Shorts en: {target_channel}")
         params = dict(
             part="snippet",
-            q=f"{target_channel} funny OR highlights OR mejores momentos",
+            q=f"{target_channel} shorts #shorts",
             type="video",
-            videoDuration="medium",
+            videoDuration="short", # < 4 min en la API, pero filtrado por etiqueta
             order="viewCount",
             publishedAfter=(datetime.utcnow() - timedelta(days=14)).isoformat("T") + "Z",
-            maxResults=10,
+            maxResults=15,
         )
-        if RELEVANCE_LANGUAGE:
-            params["relevanceLanguage"] = RELEVANCE_LANGUAGE
 
         try:
             response = youtube.search().list(**params).execute()
@@ -222,11 +218,9 @@ def search_trending_video():
             random.shuffle(items)
             for video in items:
                 video_id = video["id"]["videoId"]
-                if is_blacklisted(video_id):
-                    logger.info(f"      ⏭️ Saltando {video_id} (Blacklisted/Processed).")
-                    continue
+                if is_blacklisted(video_id): continue
                 
-                logger.info(f"✅ Video elegido: {video['snippet']['title']} (https://youtu.be/{video_id})")
+                logger.info(f"✅ Short elegido: {video['snippet']['title']} (https://youtu.be/{video_id})")
                 return {
                     "id": video_id,
                     "title": video["snippet"]["title"],
@@ -421,29 +415,42 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
 # ---------------------------------------------------------------------------
 def get_direct_video_url(youtube_url: str) -> str:
     """
-    Busca un enlace directo de streaming (.mp4 / .m3u8) usando la red
-    descentralizada Proxy (Invidious, Piped, Cobalt).
-    Esto evita que Creatomate falle intentando extraerlo él mismo.
+    Busca un enlace directo (.mp4) usando la red Propxy (Invidious, Cobalt).
+    Handles short IDs, full URLs, and Shorts URLs.
     """
+    video_id = ""
     if "youtu.be/" in youtube_url:
         video_id = youtube_url.split("/")[-1].split("?")[0]
-    else:
+    elif "/shorts/" in youtube_url:
+        video_id = youtube_url.split("/shorts/")[-1].split("?")[0]
+    elif "v=" in youtube_url:
         video_id = youtube_url.split("v=")[-1].split("&")[0]
+    else:
+        video_id = youtube_url # Fallback: Assume it's an ID
 
     headers = {
         "Accept": "application/json",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
-    
-    # 1. INVIDIOUS (Preferido: Bypass total)
-    logger.info(f"📡 Resolviendo ID '{video_id}' vía Invidious Proxy...")
+
+    # 1. COBALT API (Más fiable actualmente para Shorts)
+    logger.info(f"📡 Resolviendo ID '{video_id}' vía Cobalt API...")
+    cob_instances = ["https://api.cobalt.tools/api/json", "https://co.wuk.sh/api/json"]
+    for inst in cob_instances:
+        try:
+            r = requests.post(inst, json={"url": youtube_url, "videoQuality": "720"}, headers=headers, timeout=12)
+            if r.status_code == 200:
+                url = r.json().get("url")
+                if url: return url
+        except: continue
+
+    # 2. INVIDIOUS (Preferido: Bypass total)
+    logger.info(f"📡 Cobalt falló. Probando ID '{video_id}' vía Invidious...")
     inv_instances = [
         "https://invidious.jing.rocks",
-        "https://youtube.mosesmcloud.com",
         "https://inv.tux.pizza",
         "https://invidious.lunar.icu",
-        "https://invidious.projectsegfau.lt",
-        "https://invidious.protokolla.fi"
+        "https://invidious.projectsegfau.lt"
     ]
     random.shuffle(inv_instances)
     for inst in inv_instances:
@@ -456,38 +463,6 @@ def get_direct_video_url(youtube_url: str) -> str:
                 direct = f"{inst}/latest_version?id={video_id}&itag={itag}&local=true"
                 logger.info(f"✅ URL Invidious obtenida: {inst}")
                 return direct
-        except: continue
-
-    # 2. PIPED API
-    logger.info("📡 Invidious falló. Probando red Piped...")
-    piped_instances = ["https://pipedapi.kavin.rocks", "https://pi.ggtyler.dev/api", "https://pipedapi.drgns.space"]
-    random.shuffle(piped_instances)
-    for inst in piped_instances:
-        try:
-            r = requests.get(f"{inst}/streams/{video_id}", headers=headers, timeout=8)
-            if r.status_code == 200:
-                data = r.json()
-                if data.get("hls"): return data["hls"]
-                for s in data.get("videoStreams", []):
-                    if not s.get("videoOnly"): return s["url"]
-        except: continue
-
-    # 3. COBALT API (Ultra-Robusto)
-    logger.info("📡 Piped falló. Probando Cobalt v10...")
-    cob_instances = ["https://cobalt.tools/api/json", "https://co.wuk.sh/api/json", "https://api.cobalt.tools/api/json"]
-    for inst in cob_instances:
-        try:
-            # Cobalt v10 payload
-            payload = {
-                "url": youtube_url,
-                "videoQuality": "720",
-                "audioFormat": "mp3",
-                "isNoTTS": True
-            }
-            r = requests.post(inst, json=payload, headers=headers, timeout=10)
-            if r.status_code == 200:
-                url = r.json().get("url")
-                if url: return url
         except: continue
 
     logger.warning("⚠️ Sin URL directa. Usando fallback original.")
@@ -549,33 +524,22 @@ def upload_clip_to_temp_host(clip_path: str) -> str | None:
 # ---------------------------------------------------------------------------
 def render_viral_video(clip_source_url: str, analysis: dict) -> str | None:
     """
-    v13.0 BULLETPROOF RENDER ENGINE
-    - clip_source_url: URL pública estable del clip (no URL de stream de YouTube)
-    - analysis: dict con start_time, end_time, viral_title
+    v16.0 ULTRA-RELIABLE SHORTS RENDERER
+    Simplified design for maximum cloud success.
     """
-    logger.info(f"🎨 Iniciando render v13.0 (clip: {analysis['viral_title']})...")
-
+    api_key = os.environ.get("CREATOMATE_API_KEY")
     api_url = "https://api.creatomate.com/v1/renders"
-    headers = {
-        "Authorization": f"Bearer {CREATOMATE_API_KEY}",
-        "Content-Type": "application/json",
-    }
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
-    # v14.1: Normalizar URL y asegurar formatos de tiempo para Creatomate
-    if "youtu.be/" in clip_source_url:
-        y_id = clip_source_url.split("/")[-1].split("?")[0]
-        clip_source_url = f"https://www.youtube.com/watch?v={y_id}"
-
-    start_time = float(analysis["start_time"])
-    duration = round(float(analysis["end_time"]) - start_time, 1)
-    duration = max(5.0, min(duration, 58.0))
+    start_time = float(analysis.get("start_time", 0))
+    duration = float(analysis.get("duration", 30))
 
     def build_payload(with_subtitles: bool) -> dict:
         t_start = f"{start_time} s"
         t_dur = f"{duration} s"
         
         elements = [
-            # v15.0: Fondo sólido oscuro para máxima velocidad de render y fiabilidad
+            # v16.0: Fondo sólido oscuro para máxima fiabilidad
             {
                 "id": "background",
                 "type": "rect",
@@ -585,7 +549,7 @@ def render_viral_video(clip_source_url: str, analysis: dict) -> str | None:
                 "x": "50%",
                 "y": "50%",
             },
-            # Vídeo principal centrado
+            # Vídeo principal (Shorts content)
             {
                 "id": "video-base",
                 "type": "video",
@@ -599,33 +563,6 @@ def render_viral_video(clip_source_url: str, analysis: dict) -> str | None:
                 "fit": "contain",
                 "audio": True,
             },
-            # Título hook arriba
-            {
-                "id": "hook-text",
-                "type": "text",
-                "text": analysis["viral_title"].upper(),
-                "width": "85%",
-                "height": "auto",
-                "x": "50%",
-                "y": "12%",
-                "text_alignment": "center",
-                "y_alignment": "center",
-                "font_family": "Montserrat",
-                "font_weight": "900",
-                "font_size": "90 px",
-                "color": "#ffffff",
-                "background_color": "#e50914",
-                "background_padding": "28 px 48 px",
-                "background_border_radius": "18 px",
-                "shadow_color": "rgba(0,0,0,0.8)",
-                "shadow_blur": "20 px",
-                "animations": [
-                    {"type": "scale", "time": "start", "duration": "0.4 s",
-                     "easing": "elastic-out", "start_scale": "0%"},
-                    {"type": "pulse", "time": "start", "duration": "loop",
-                     "interval": "2.5 s", "scale": "105%"},
-                ],
-            },
         ]
 
         if with_subtitles:
@@ -636,11 +573,11 @@ def render_viral_video(clip_source_url: str, analysis: dict) -> str | None:
                 "width": "90%",
                 "height": "auto",
                 "x": "50%",
-                "y": "82%",
-                "text_alignment": "center",
+                "y": "80%",
+                "text_align": "center",
                 "font_family": "Montserrat",
                 "font_weight": "900",
-                "font_size": "88 px",
+                "font_size": "70 px",
                 "text_transform": "uppercase",
                 "color": "#ffff00",
                 "stroke_color": "#000000",
