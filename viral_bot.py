@@ -512,57 +512,90 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
             import requests
             import subprocess
             
-            piped_instances = [
-                "https://pipedapi.kavin.rocks",
-                "https://pipedapi.tokhmi.xyz",
-                "https://pipedapi.smnz.de",
-                "https://piped-api.garudalinux.org"
+            cobalt_instances = [
+                "https://api.cobalt.tools/",
+                "https://cobalt.twi.cx/", 
+                "https://cobalt.envycast.net/",
+                "https://co.eepy.today/",
+                "https://cobalt.puktu.net/",
+                "https://cobalt.starnes.es/",
+                "https://dl.woof.is/"
             ]
-            
-            video_id = youtube_url.split("v=")[-1].split("&")[0]
             
             direct_url = None
             v_url = None
             a_url = None
             
-            for p_inst in piped_instances:
+            # --- FALLBACK 1: COBALT API (v10) ---
+            for instance in cobalt_instances:
                 try:
-                    resp = requests.get(f"{p_inst}/streams/{video_id}", timeout=15)
-                    if resp.status_code == 200:
+                    payload = {"url": youtube_url, "videoQuality": "720"}
+                    # Algunas instancias de cobalt requieren que no lleve '/' final o viceversa, intentamos con lo que hay
+                    resp = requests.post(instance, json=payload, headers=headers, timeout=10)
+                    if resp.status_code in (200, 202):
                         data = resp.json()
-                        
-                        # 1. HLS Stream (Livestreams)
-                        if data.get("hls"):
-                            direct_url = data.get("hls")
-                            logger.info(f"✅ HLS stream obtenido de {p_inst}")
-                            break
-                            
-                        # 2. Progressive MP4 (Video + Audio combinados)
-                        for s in data.get("videoStreams", []):
-                            # videoOnly == False significa que trae audio!
-                            if s.get("videoOnly") is False:
-                                direct_url = s.get("url")
-                                logger.info(f"✅ Progressive MP4 ({s.get('quality')}) obtenido de {p_inst}")
-                                break
-                        
-                        if direct_url: break
-                        
-                        # 3. DASH Streams (Video y Audio separados) - El estándar de YouTube ahora
-                        for s in data.get("videoStreams", []):
-                            if s.get("quality") in ("1080p", "720p"):
-                                v_url = s.get("url")
-                                break
-                        if not v_url and data.get("videoStreams"):
-                            v_url = data.get("videoStreams")[0].get("url")
-                            
-                        if data.get("audioStreams"):
-                            a_url = data.get("audioStreams")[0].get("url")
-                            
-                        if v_url and a_url:
-                            logger.info(f"✅ DASH (Video + Audio separados) obtenidos de {p_inst}")
+                        direct_url = data.get("url")
+                        if direct_url:
+                            logger.info(f"✅ Enlace de video directo obtenido de Cobalt ({instance})")
                             break
                 except Exception as e:
-                    logger.warning(f"⚠️ {p_inst} falló: {e}")
+                    pass
+
+            # --- FALLBACK 2: PIPED API (HLS / DASH PROXY) ---
+            if not direct_url:
+                logger.info("🔄 Cobalt no devolvió el clip. Intentando con múltiples nodos de Piped API...")
+                piped_instances = [
+                    "https://pipedapi.kavin.rocks",
+                    "https://pipedapi.us.projectsegfau.lt",
+                    "https://pipedapi.adminforge.de",
+                    "https://pi.ggtyler.dev/api",
+                    "https://pipedapi.drgns.space",
+                    "https://pipedapi.r4fo.com"
+                ]
+                
+                try:
+                    video_id = youtube_url.split("v=")[-1].split("&")[0]
+                    for p_inst in piped_instances:
+                        try:
+                            resp = requests.get(f"{p_inst}/streams/{video_id}", timeout=10)
+                            if resp.status_code == 200:
+                                data = resp.json()
+                                
+                                # HLS
+                                if data.get("hls"):
+                                    direct_url = data.get("hls")
+                                    logger.info(f"✅ HLS stream obtenido de {p_inst}")
+                                    break
+                                
+                                # Progressive
+                                for s in data.get("videoStreams", []):
+                                    if s.get("videoOnly") is False:
+                                        direct_url = s.get("url")
+                                        logger.info(f"✅ Progressive MP4 ({s.get('quality')}) obtenido de {p_inst}")
+                                        break
+                                if direct_url: break
+                                
+                                # DASH
+                                for s in data.get("videoStreams", []):
+                                    if s.get("quality") in ("1080p", "720p"):
+                                        v_url = s.get("url")
+                                        break
+                                if not v_url and data.get("videoStreams"):
+                                    v_url = data.get("videoStreams")[0].get("url")
+                                    
+                                if data.get("audioStreams"):
+                                    a_url = data.get("audioStreams")[0].get("url")
+                                    
+                                if v_url and a_url:
+                                    logger.info(f"✅ DASH (Video + Audio separados) obtenidos de {p_inst}")
+                                    break
+                        except Exception:
+                            continue
+                        
+                        if direct_url or (v_url and a_url):
+                            break
+                except Exception as e:
+                    logger.warning(f"⚠️ Error general en loop de Piped: {e}")
 
             duration_str = str(float(end) - float(start))
             start_str = str(float(start))
