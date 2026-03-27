@@ -428,35 +428,77 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
     try:
         import yt_dlp
 
-        ydl_opts = {
-            "quiet": False,
-            "no_warnings": False,
-            "format": "bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]/best[ext=mp4]/best",
-            "outtmpl": out_path.replace(".mp4", ".%(ext)s"),
-            "download_sections": [{"section": section}],
-            "force_keyframes_at_cuts": True,
-            "merge_output_format": "mp4",
-        }
+        # v13.1 FIX: usar clientes Android/iOS que NO requieren resolver el n-challenge
+        # (el challenge solo afecta al cliente web estándar de YouTube)
+        PLAYER_CLIENTS = ["android", "ios", "web"]
 
-        if cookie_file:
-            ydl_opts["cookiefile"] = cookie_file
+        last_err = None
+        for client in PLAYER_CLIENTS:
+            logger.info(f"🎬 Intentando descarga con player_client={client}...")
 
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([youtube_url])
+            # Limpiar archivo previo entre intentos
+            for f in BASE_DIR.glob("clip_download.*"):
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
 
-        # yt-dlp puede añadir extensión; buscar el archivo resultante
-        candidates = list(BASE_DIR.glob("clip_download.*"))
-        if candidates:
-            actual = str(candidates[0])
-            if actual != out_path and os.path.exists(actual):
-                os.rename(actual, out_path)
+            ydl_opts = {
+                "quiet": False,
+                "no_warnings": False,
+                # Formato MP4 con audio — fallback progresivo
+                "format": (
+                    "bestvideo[ext=mp4][vcodec^=avc][height<=1080]"
+                    "+bestaudio[ext=m4a]"
+                    "/bestvideo[ext=mp4]+bestaudio"
+                    "/best[ext=mp4]"
+                    "/best"
+                ),
+                "outtmpl": str(BASE_DIR / "clip_download.%(ext)s"),
+                "download_sections": [{"section": section}],
+                "force_keyframes_at_cuts": True,
+                "merge_output_format": "mp4",
+                # FIX CLAVE: usar cliente android/ios bypasea el n-challenge
+                "extractor_args": {
+                    "youtube": {
+                        "player_client": [client],
+                    }
+                },
+            }
 
-        if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
-            logger.info(f"✅ Clip descargado: {out_path} ({os.path.getsize(out_path)//1024} KB)")
-            return out_path
-        else:
-            logger.error("❌ Archivo descargado vacío o no encontrado.")
-            return None
+            if cookie_file:
+                ydl_opts["cookiefile"] = cookie_file
+
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    ydl.download([youtube_url])
+            except Exception as e:
+                last_err = e
+                logger.warning(f"⚠️ player_client={client} falló: {e}")
+                continue
+
+            # Buscar el archivo resultante (yt-dlp puede variar la extensión)
+            candidates = sorted(BASE_DIR.glob("clip_download.*"))
+            mp4_file = next(
+                (f for f in candidates if f.suffix.lower() == ".mp4"),
+                candidates[0] if candidates else None,
+            )
+
+            if mp4_file and mp4_file.exists() and mp4_file.stat().st_size > 1000:
+                # Renombrar a out_path canónico si es diferente
+                if str(mp4_file) != out_path:
+                    mp4_file.rename(out_path)
+                logger.info(
+                    f"✅ Clip descargado con '{client}': "
+                    f"{out_path} ({os.path.getsize(out_path)//1024} KB)"
+                )
+                return out_path
+
+            logger.warning(f"⚠️ player_client={client}: archivo vacío o no encontrado.")
+            last_err = Exception("Archivo vacío")
+
+        logger.error(f"❌ Todos los player_clients fallaron. Último error: {last_err}")
+        return None
 
     except ImportError:
         logger.error("❌ yt-dlp no instalado. Añádelo a requirements.txt")
