@@ -201,6 +201,7 @@ def search_trending_video():
             part="snippet",
             q=f"{target_channel} funny OR highlights OR mejores momentos",
             type="video",
+            videoDuration="medium",
             order="viewCount",
             publishedAfter=(datetime.utcnow() - timedelta(days=14)).isoformat("T") + "Z",
             maxResults=10,
@@ -505,35 +506,61 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
 
         logger.error(f"❌ Todos los player_clients fallaron. Último error: {last_err}")
         
-        # v13.2 FIX: Fallback a pytubefix si yt-dlp está bloqueado por IP (Sign in to confirm you're not a bot)
-        logger.info("🔄 Intentando fallback extremo con pytubefix (po_token bypass)...")
+        # v13.2 FIX: Fallback a Cobalt API si yt-dlp está bloqueado por IP (Sign in to confirm you're not a bot)
+        logger.info("🔄 Intentando fallback extremo con Cobalt API (anti-ban proxy)...")
         try:
-            from pytubefix import YouTube
+            import requests
             import subprocess
             
-            yt = YouTube(youtube_url, use_po_token=True)
-            stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+            headers = {
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            }
             
-            if stream:
-                dl_path = str(BASE_DIR / "full_video.mp4")
-                logger.info(f"⬇️ Descargando video completo ({stream.resolution}) para recortarlo localmente...")
-                stream.download(filename=dl_path)
-                
-                logger.info("✂️ Recortando clip temporal con ffmpeg...")
+            cobalt_instances = [
+                "https://co.wuk.sh/api/json", 
+                "https://cobalt.api.zmate.net/api/json",
+                "https://api.cobalt.tools/api/json"
+            ]
+            
+            direct_url = None
+            for instance in cobalt_instances:
+                try:
+                    payload = {"url": youtube_url, "vQuality": "720"}
+                    resp = requests.post(instance, json=payload, headers=headers, timeout=15)
+                    if hasattr(resp, "status_code") and resp.status_code == 200:
+                        data = resp.json()
+                        if "url" in data:
+                            direct_url = data["url"]
+                            logger.info(f"✅ Enlace directo obtenido de Cobalt ({instance})")
+                            break
+                        else:
+                            logger.warning(f"⚠️ Cobalt ({instance}) no devolvió URL: {data}")
+                    else:
+                        logger.warning(f"⚠️ Cobalt ({instance}) devolvió status {getattr(resp, 'status_code', 'N/A')}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Instancia {instance} falló: {e}")
+            
+            if direct_url:
+                logger.info("✂️ FFMPEG descargando y recortando directamente desde la URL remota...")
+                # ffmpeg recorta remotamente. Pasamos User-Agent para que el servidor de video no corte la conexión.
                 subprocess.run([
-                    "ffmpeg", "-y", "-i", dl_path, 
-                    "-ss", str(float(start)), "-to", str(float(end)), 
+                    "ffmpeg", "-y", 
+                    "-user_agent", headers["User-Agent"],
+                    "-ss", str(float(start)), 
+                    "-i", direct_url, 
+                    "-t", str(float(end) - float(start)), 
                     "-c:v", "copy", "-c:a", "copy", out_path
                 ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 
-                if os.path.exists(dl_path):
-                    os.remove(dl_path)
-                    
                 if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
-                    logger.info(f"✅ Clip descargado con pytubefix: {out_path} ({os.path.getsize(out_path)//1024} KB)")
+                    logger.info(f"✅ Clip extraído vía Cobalt: {out_path} ({os.path.getsize(out_path)//1024} KB)")
                     return out_path
+            else:
+                logger.error("❌ Ninguna instancia de Cobalt pudo obtener el video.")
         except Exception as p_err:
-            logger.error(f"❌ Fallback pytubefix también falló: {p_err}")
+            logger.error(f"❌ Fallback Cobalt falló fatalmente: {p_err}")
 
         return None
 
