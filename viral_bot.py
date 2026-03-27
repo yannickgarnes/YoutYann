@@ -85,31 +85,37 @@ else:  # BOTH — mezcla aleatoria con más peso en EN para monetización
 logger.info(f"🌍 Modo idioma: {LANG_MODE} | Canales: {', '.join(CHANNELS_TO_WATCH)}")
 
 # ---------------------------------------------------------------------------
-# CACHE de videos ya procesados
+# CACHE DE VIDEOS PROCESADOS Y FALLIDOS
 # ---------------------------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
 PROCESSED_FILE = BASE_DIR / "processed_ids.json"
+FAILED_FILE    = BASE_DIR / "failed_ids.json"
 
-
-def load_processed_ids() -> set:
-    if PROCESSED_FILE.exists():
+def load_ids(file_path) -> set:
+    if file_path.exists():
         try:
-            with open(PROCESSED_FILE, "r", encoding="utf-8") as f:
+            with open(file_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return set(data.get("ids", []))
+                # Handle both list and dict formats for processed_ids.json
+                if isinstance(data, dict) and "ids" in data:
+                    return set(data["ids"])
+                elif isinstance(data, list):
+                    return set(data)
         except Exception:
             pass
     return set()
 
-
-def save_processed_id(video_id: str):
-    ids = load_processed_ids()
+def save_id(file_path, video_id):
+    ids = load_ids(file_path)
     ids.add(video_id)
-    # Conservar máximo los últimos 500 para no crecer indefinidamente
-    trimmed = list(ids)[-500:]
-    with open(PROCESSED_FILE, "w", encoding="utf-8") as f:
-        json.dump({"ids": trimmed, "updated": datetime.utcnow().isoformat()}, f, indent=2)
-    logger.info(f"📝 ID {video_id} guardado en cache ({len(trimmed)} total).")
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(list(ids), f)
+    logger.info(f"💾 ID {video_id} guardado en {file_path.name}.")
+
+def is_blacklisted(video_id):
+    p = load_ids(PROCESSED_FILE)
+    f = load_ids(FAILED_FILE)
+    return video_id in p or video_id in f
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +195,6 @@ def search_trending_video():
         logger.error("❌ YouTube client no disponible.")
         return None
 
-    processed = load_processed_ids()
     channels = CHANNELS_TO_WATCH[:]
     random.shuffle(channels)
     
@@ -212,33 +217,26 @@ def search_trending_video():
         try:
             response = youtube.search().list(**params).execute()
             items = response.get("items", [])
-            if not items:
-                continue
+            if not items: continue
 
-            # Para más variedad, barajamos los resultados TOP del canal
             random.shuffle(items)
-
             for video in items:
                 video_id = video["id"]["videoId"]
-                if video_id in processed:
-                    logger.info(f"      ⏭️ Saltando {video_id} (ya procesado).")
+                if is_blacklisted(video_id):
+                    logger.info(f"      ⏭️ Saltando {video_id} (Blacklisted/Processed).")
                     continue
                 
-                video_title = video["snippet"]["title"]
-                channel_title = video["snippet"]["channelTitle"]
-                logger.info(f"✅ Video elegido: {video_title} (https://youtu.be/{video_id})")
+                logger.info(f"✅ Video elegido: {video['snippet']['title']} (https://youtu.be/{video_id})")
                 return {
                     "id": video_id,
-                    "title": video_title,
+                    "title": video["snippet"]["title"],
                     "url": f"https://www.youtube.com/watch?v={video_id}",
-                    "channel": channel_title,
+                    "channel": video["snippet"]["channelTitle"],
                 }
-
         except Exception as e:
-            logger.error(f"      ❌ Error buscando en YouTube para {target_channel}: {e}")
+            logger.error(f"      ❌ Error buscando en {target_channel}: {e}")
             continue
 
-    logger.warning("⚠️ Todos los videos candidatos ya fueron procesados o no encontrados.")
     return None
 
 
@@ -474,18 +472,25 @@ def get_direct_video_url(youtube_url: str) -> str:
                     if not s.get("videoOnly"): return s["url"]
         except: continue
 
-    # 3. COBALT API
-    logger.info("📡 Piped falló. Probando Cobalt...")
-    cob_instances = ["https://cobalt.twi.cx/", "https://api.cobalt.tools/"]
+    # 3. COBALT API (Ultra-Robusto)
+    logger.info("📡 Piped falló. Probando Cobalt v10...")
+    cob_instances = ["https://cobalt.tools/api/json", "https://co.wuk.sh/api/json", "https://api.cobalt.tools/api/json"]
     for inst in cob_instances:
         try:
-            r = requests.post(inst, json={"url": youtube_url, "videoQuality": "720"}, headers=headers, timeout=8)
-            if r.status_code in (200, 202):
+            # Cobalt v10 payload
+            payload = {
+                "url": youtube_url,
+                "videoQuality": "720",
+                "audioFormat": "mp3",
+                "isNoTTS": True
+            }
+            r = requests.post(inst, json=payload, headers=headers, timeout=10)
+            if r.status_code == 200:
                 url = r.json().get("url")
                 if url: return url
         except: continue
 
-    logger.warning("⚠️ No se pudo resolver URL directa. Usando URL original de Youtube como último recurso.")
+    logger.warning("⚠️ Sin URL directa. Usando fallback original.")
     return youtube_url
 
 
@@ -566,28 +571,19 @@ def render_viral_video(clip_source_url: str, analysis: dict) -> str | None:
     duration = max(5.0, min(duration, 58.0))
 
     def build_payload(with_subtitles: bool) -> dict:
-        # Usamos strings con "s" para asegurar que Creatomate lo entienda como segundos
         t_start = f"{start_time} s"
         t_dur = f"{duration} s"
         
         elements = [
-            # Fondo difuminado 9:16
+            # v15.0: Fondo sólido oscuro para máxima velocidad de render y fiabilidad
             {
-                "id": "background-blur",
-                "type": "video",
-                "source": clip_source_url,
-                "trim_start": t_start,
-                "duration": t_dur,
+                "id": "background",
+                "type": "rect",
                 "width": 1080,
                 "height": 1920,
+                "color": "#121212",
                 "x": "50%",
                 "y": "50%",
-                "fit": "cover",
-                "volume": "0%",
-                "filters": [
-                    {"type": "blur", "radius": "45 px"},
-                    {"type": "brightness", "level": "70%"},
-                ],
             },
             # Vídeo principal centrado
             {
@@ -827,41 +823,61 @@ def main():
         logger.error("💀 Gemini no pudo analizar el vídeo. Abortando.")
         return
 
-    logger.info(
-        f"📊 Clip planificado: '{analysis['viral_title']}' | "
-        f"{analysis['start_time']}s → {analysis['end_time']}s | "
-        f"Motivo: {analysis.get('summary', 'N/A')}"
-    )
-
-    # 3. v14.2 HYBRID CLOUD EXTRACTION: Resolvemos el stream byte-link con proxies
-    # y enviamos ESE link directo a Creatomate. Esto evita fallos de extracción en el render.
-    source_url = get_direct_video_url(video_data["url"])
+def main():
+    logger.info("🎬 INICIANDO YoutYann v15.0 'FINAL STAND RESILIENCE'")
     
-    final_video_url = render_viral_video(source_url, analysis)
-    if not final_video_url:
-        logger.error("💀 Creatomate no pudo renderizar el vídeo (o falló el cloud-download). Abortando.")
-        return
+    attempts = 0
+    max_attempts = 5
+    success = False
 
-    # 6. Subir a YouTube Shorts
-    is_english = LANG_MODE in ("EN", "BOTH")
-    tags = "#Shorts #Viral #Clip #Highlights" if is_english else "#Shorts #Viral #Clips #Español"
-    title = f"{analysis['viral_title']} {tags.split()[0]}"
-    description = (
-        f"{analysis['viral_title']}\n\n"
-        f"{'Credits' if is_english else 'Créditos'}: {video_data['channel']}\n\n"
-        f"{tags}"
-    )
+    while attempts < max_attempts and not success:
+        attempts += 1
+        logger.info(f"--- 🔄 INTENTO DE CICLO {attempts}/{max_attempts} ---")
 
-    yt_video_id = upload_to_youtube_shorts(final_video_url, title, description)
+        # 1. Buscar video viral (saltando los baneados/procesados)
+        video_data = search_trending_video()
+        if not video_data: 
+            logger.error("💀 No hay más videos en esta iteración. Reintentando...")
+            continue
+            
+        if is_blacklisted(video_data["id"]):
+            logger.info(f"⏭️ Video {video_data['id']} ya está en blacklist/cache. Skip.")
+            continue
 
-    # 7. Guardar en cache si subió correctamente
-    if yt_video_id:
-        save_processed_id(video_data["id"])
-        logger.info(f"🏁 ¡Ciclo completado! Short publicado: https://youtube.com/shorts/{yt_video_id}")
+        # 2. Analizar con Gemini
+        analysis = analyze_video_for_clipper(video_data)
+        if not analysis: continue
+
+        # 3. v15.0 HYBRID CLOUD EXTRACTION
+        source_url = get_direct_video_url(video_data["url"])
+        
+        # 4. Renderizar (Failsafe)
+        final_video_url = render_viral_video(source_url, analysis)
+        if not final_video_url:
+            logger.warning(f"❌ Falló renderizado de {video_data['id']}. Añadiendo a BLACKLIST.")
+            save_id(FAILED_FILE, video_data["id"])
+            continue
+
+        # 5. Subir a YouTube Shorts
+        is_english = LANG_MODE in ("EN", "BOTH")
+        tags = "#Shorts #Viral #Clip" if is_english else "#Shorts #Viral #Español"
+        title = f"{analysis['viral_title']} {tags.split()[0]}"
+        description = f"{analysis['viral_title']}\n\nCredits: {video_data['channel']}\n\n{tags}"
+
+        yt_video_id = upload_to_youtube_shorts(final_video_url, title, description)
+
+        if yt_video_id:
+            save_id(PROCESSED_FILE, video_data["id"])
+            logger.info(f"🎉 ÉXITO TOTAL: https://youtube.com/shorts/{yt_video_id}")
+            success = True
+        else:
+            logger.error(f"💀 Fallo en subida final de {video_data['id']}.")
+            save_id(FAILED_FILE, video_data["id"])
+
+    if not success:
+        logger.error("☠️ Se agotaron los intentos máximos sin éxito. Revisa logs de Creatomate.")
     else:
-        logger.error("💀 La subida a YouTube falló.")
-
-    logger.info("😴 Fin del ciclo.")
+        logger.info("😴 Ciclo completado satisfactoriamente.")
 
 
 if __name__ == "__main__":
