@@ -434,13 +434,13 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
     try:
         import yt_dlp
 
-        # v13.1 FIX: usar clientes Android/iOS que NO requieren resolver el n-challenge
-        # (el challenge solo afecta al cliente web estándar de YouTube)
-        PLAYER_CLIENTS = ["android", "ios", "web"]
+        # v13.9 FIX: usar clientes tv/mweb que NO requieren Attestation (Integrity Token)
+        # (android e ios lo exigen desde 2025/2026 y youtube los banea si usamos yt-dlp)
+        PLAYER_CLIENTS = ["tv", "mweb", "tv_embedded", "web"]
 
         last_err = None
         for client in PLAYER_CLIENTS:
-            logger.info(f"🎬 Intentando descarga con player_client={client}...")
+            logger.info(f"🎬 Intentando descarga nativa con player_client={client}...")
 
             # Limpiar archivo previo entre intentos
             for f in BASE_DIR.glob("clip_download.*"):
@@ -464,7 +464,6 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
                 "download_sections": [{"section": section}],
                 "force_keyframes_at_cuts": True,
                 "merge_output_format": "mp4",
-                # FIX CLAVE: usar cliente android/ios bypasea el n-challenge
                 "extractor_args": {
                     "youtube": {
                         "player_client": [client],
@@ -472,8 +471,8 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
                 },
             }
 
-            # Solo el cliente web soporta cookies. Android/iOS se saltarán si pasamos cookies
-            if cookie_file and client not in ("android", "ios"):
+            # Solo el cliente web soporta cookies. Android/iOS/TV se saltarán si pasamos cookies
+            if cookie_file and client == "web":
                 ydl_opts["cookiefile"] = cookie_file
 
             try:
@@ -487,45 +486,22 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
             # Buscar el archivo resultante (yt-dlp puede variar la extensión)
             candidates = sorted(BASE_DIR.glob("clip_download.*"))
             mp4_file = next(
-            cmd = ["yt-dlp", youtube_url, *config]
-            cmd.extend(base_options)
-            
-            # Only the web client supports cookies. Android/iOS will skip if we pass cookies
-            # If cookie_file is set, we only use it for the 'web' client.
-            if cookie_file and client != "web":
-                # Remove cookie-file from cmd for non-web clients
-                cmd = [arg for arg in cmd if arg != "--cookie-file" and arg != cookie_file]
+                (f for f in candidates if f.suffix.lower() == ".mp4"),
+                candidates[0] if candidates else None,
+            )
 
-            try:
-                result = subprocess.run(cmd, check=False, capture_output=True, text=True)
-                
-                # Buscar el archivo resultante (yt-dlp puede variar la extensión)
-                candidates = sorted(BASE_DIR.glob("clip_download.*"))
-                mp4_file = next(
-                    (f for f in candidates if f.suffix.lower() == ".mp4"),
-                    candidates[0] if candidates else None,
+            if mp4_file and mp4_file.exists() and mp4_file.stat().st_size > 1000:
+                # Renombrar a out_path canónico si es diferente
+                if str(mp4_file) != out_path:
+                    mp4_file.rename(out_path)
+                logger.info(
+                    f"✅ Clip descargado con '{client}': "
+                    f"{out_path} ({os.path.getsize(out_path)//1024} KB)"
                 )
+                return out_path
 
-                if result.returncode == 0 and mp4_file and mp4_file.exists() and mp4_file.stat().st_size > 1000:
-                    # Renombrar a out_path canónico si es diferente
-                    if str(mp4_file) != out_path:
-                        mp4_file.rename(out_path)
-                    logger.info(
-                        f"✅ Clip descargado exitosamente con client={client}:\n"
-                        f"{out_path} ({os.path.getsize(out_path)//1024} KB)"
-                    )
-                    return out_path
-
-                logger.warning(f"⚠️ player_client={client} falló: {result.stderr.strip().split(chr(10))[-1]}")
-                last_err = Exception(result.stderr.strip().split(chr(10))[-1])
-            except Exception as e:
-                logger.warning(f"⚠️ Excepción con player_client={client}: {e}")
-                last_err = e
-
-            # Si existía un log falso lo eliminamos
-            if os.path.exists(out_path):
-                try: os.remove(out_path)
-                except: pass
+            logger.warning(f"⚠️ player_client={client}: archivo vacío o no encontrado.")
+            last_err = Exception("Archivo vacío")
 
         logger.error(f"❌ Todos los player_clients de yt-dlp fallaron. Último error: {last_err}")
         
