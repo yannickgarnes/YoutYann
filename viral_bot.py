@@ -427,15 +427,26 @@ def get_direct_video_url(youtube_url: str) -> str:
     descentralizada Proxy (Invidious, Piped, Cobalt).
     Esto evita que Creatomate falle intentando extraerlo él mismo.
     """
-    video_id = youtube_url.split("v=")[-1].split("&")[0]
+    if "youtu.be/" in youtube_url:
+        video_id = youtube_url.split("/")[-1].split("?")[0]
+    else:
+        video_id = youtube_url.split("v=")[-1].split("&")[0]
+
     headers = {
         "Accept": "application/json",
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
     }
     
     # 1. INVIDIOUS (Preferido: Bypass total)
-    logger.info("📡 Resolviendo URL directa vía Invidious Proxy...")
-    inv_instances = ["https://yewtu.be", "https://invidious.jing.rocks", "https://vid.puffyan.us", "https://inv.tux.pizza"]
+    logger.info(f"📡 Resolviendo ID '{video_id}' vía Invidious Proxy...")
+    inv_instances = [
+        "https://invidious.jing.rocks",
+        "https://youtube.mosesmcloud.com",
+        "https://inv.tux.pizza",
+        "https://invidious.lunar.icu",
+        "https://invidious.projectsegfau.lt",
+        "https://invidious.protokolla.fi"
+    ]
     random.shuffle(inv_instances)
     for inst in inv_instances:
         try:
