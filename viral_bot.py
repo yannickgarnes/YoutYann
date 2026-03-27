@@ -184,56 +184,61 @@ def get_youtube_credentials():
 # BUSCAR VÍDEO VIRAL
 # ---------------------------------------------------------------------------
 def search_trending_video():
-    """Busca el vídeo más viral de los canales configurados (últimos 7 días)."""
+    """Busca el vídeo más viral de los canales configurados (últimos 14 días)."""
     if not youtube:
         logger.error("❌ YouTube client no disponible.")
         return None
 
     processed = load_processed_ids()
-    query = " | ".join(CHANNELS_TO_WATCH)
-    logger.info(f"🔍 Buscando videos virales de: {query}")
+    channels = CHANNELS_TO_WATCH[:]
+    random.shuffle(channels)
+    
+    logger.info(f"🔍 Buscando videos virales iterando canales...")
 
-    params = dict(
-        part="snippet",
-        q=f"{query} mejores momentos highlights best moments funny",
-        type="video",
-        order="viewCount",
-        publishedAfter=(datetime.utcnow() - timedelta(days=7)).isoformat("T") + "Z",
-        maxResults=15,
-    )
-    if RELEVANCE_LANGUAGE:
-        params["relevanceLanguage"] = RELEVANCE_LANGUAGE
+    for target_channel in channels:
+        logger.info(f"   ▶️ Buscando en: {target_channel}")
+        params = dict(
+            part="snippet",
+            q=f"{target_channel} funny OR highlights OR mejores momentos",
+            type="video",
+            order="viewCount",
+            publishedAfter=(datetime.utcnow() - timedelta(days=14)).isoformat("T") + "Z",
+            maxResults=10,
+        )
+        if RELEVANCE_LANGUAGE:
+            params["relevanceLanguage"] = RELEVANCE_LANGUAGE
 
-    try:
-        response = youtube.search().list(**params).execute()
-        items = response.get("items", [])
-        if not items:
-            logger.warning("⚠️ No se encontraron videos.")
-            return None
-
-        random.shuffle(items)
-
-        for video in items:
-            video_id = video["id"]["videoId"]
-            if video_id in processed:
-                logger.info(f"⏭️ Saltando {video_id} (ya procesado).")
+        try:
+            response = youtube.search().list(**params).execute()
+            items = response.get("items", [])
+            if not items:
                 continue
-            video_title = video["snippet"]["title"]
-            channel = video["snippet"]["channelTitle"]
-            logger.info(f"✅ Video elegido: {video_title} (https://youtu.be/{video_id})")
-            return {
-                "id": video_id,
-                "title": video_title,
-                "url": f"https://www.youtube.com/watch?v={video_id}",
-                "channel": channel,
-            }
 
-        logger.warning("⚠️ Todos los videos candidatos ya fueron procesados.")
-        return None
+            # Para más variedad, barajamos los resultados TOP del canal
+            random.shuffle(items)
 
-    except Exception as e:
-        logger.error(f"❌ Error buscando en YouTube: {e}")
-        return None
+            for video in items:
+                video_id = video["id"]["videoId"]
+                if video_id in processed:
+                    logger.info(f"      ⏭️ Saltando {video_id} (ya procesado).")
+                    continue
+                
+                video_title = video["snippet"]["title"]
+                channel_title = video["snippet"]["channelTitle"]
+                logger.info(f"✅ Video elegido: {video_title} (https://youtu.be/{video_id})")
+                return {
+                    "id": video_id,
+                    "title": video_title,
+                    "url": f"https://www.youtube.com/watch?v={video_id}",
+                    "channel": channel_title,
+                }
+
+        except Exception as e:
+            logger.error(f"      ❌ Error buscando en YouTube para {target_channel}: {e}")
+            continue
+
+    logger.warning("⚠️ Todos los videos candidatos ya fueron procesados o no encontrados.")
+    return None
 
 
 # ---------------------------------------------------------------------------
