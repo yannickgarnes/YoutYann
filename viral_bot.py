@@ -739,8 +739,9 @@ def render_viral_video(clip_source_url: str, analysis: dict) -> str | None:
         "Content-Type": "application/json",
     }
 
-    # El clip ya está recortado, así que trim_start=0 y duration=duración total
-    duration = round(float(analysis["end_time"]) - float(analysis["start_time"]), 1)
+    # v14.0: Ahora usamos el video original de YouTube y dejamos que Creatomate recorte.
+    start_time = float(analysis["start_time"])
+    duration = round(float(analysis["end_time"]) - start_time, 1)
     duration = max(5.0, min(duration, 58.0))
 
     def build_payload(with_subtitles: bool) -> dict:
@@ -749,8 +750,8 @@ def render_viral_video(clip_source_url: str, analysis: dict) -> str | None:
             {
                 "id": "background-blur",
                 "type": "video",
-                "source": clip_source_url,
-                "trim_start": 0,
+                "source": clip_source_url, # URL de YouTube
+                "trim_start": start_time,
                 "duration": duration,
                 "width": 1080,
                 "height": 1920,
@@ -768,7 +769,7 @@ def render_viral_video(clip_source_url: str, analysis: dict) -> str | None:
                 "id": "video-base",
                 "type": "video",
                 "source": clip_source_url,
-                "trim_start": 0,
+                "trim_start": start_time,
                 "duration": duration,
                 "width": "100%",
                 "height": "auto",
@@ -1006,30 +1007,11 @@ def main():
         f"Motivo: {analysis.get('summary', 'N/A')}"
     )
 
-    # 3. Descargar clip localmente con yt-dlp (FIX CRÍTICO v13.0)
-    clip_path = download_clip(
-        video_data["url"],
-        float(analysis["start_time"]),
-        float(analysis["end_time"]),
-    )
-    if not clip_path:
-        logger.error("💀 No se pudo descargar el clip. Abortando.")
-        return
-
-    # 4. Subir clip a hosting público temporal → URL estable para Creatomate
-    public_clip_url = upload_clip_to_temp_host(clip_path)
-    if not public_clip_url:
-        logger.error("💀 No se pudo subir el clip al hosting temporal. Abortando.")
-        return
-
-    # 5. Renderizar con Creatomate usando URL estable (sin expiración)
-    analysis_for_render = dict(analysis)
-    analysis_for_render["start_time"] = 0  # El clip ya empieza desde 0
-    analysis_for_render["end_time"] = analysis["end_time"] - analysis["start_time"]
-
-    final_video_url = render_viral_video(public_clip_url, analysis_for_render)
+    # 3. v14.0 CLOUD EXTRACTION: Bypasseamos la descarga local para evitar el ban de IP de GitHub
+    # Enviamos directamente la URL de YouTube a Creatomate.
+    final_video_url = render_viral_video(video_data["url"], analysis)
     if not final_video_url:
-        logger.error("💀 Creatomate no pudo renderizar el vídeo. Abortando.")
+        logger.error("💀 Creatomate no pudo renderizar el vídeo (o falló el cloud-download). Abortando.")
         return
 
     # 6. Subir a YouTube Shorts
