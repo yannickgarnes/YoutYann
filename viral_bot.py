@@ -739,20 +739,28 @@ def render_viral_video(clip_source_url: str, analysis: dict) -> str | None:
         "Content-Type": "application/json",
     }
 
-    # v14.0: Ahora usamos el video original de YouTube y dejamos que Creatomate recorte.
+    # v14.1: Normalizar URL y asegurar formatos de tiempo para Creatomate
+    if "youtu.be/" in clip_source_url:
+        y_id = clip_source_url.split("/")[-1].split("?")[0]
+        clip_source_url = f"https://www.youtube.com/watch?v={y_id}"
+
     start_time = float(analysis["start_time"])
     duration = round(float(analysis["end_time"]) - start_time, 1)
     duration = max(5.0, min(duration, 58.0))
 
     def build_payload(with_subtitles: bool) -> dict:
+        # Usamos strings con "s" para asegurar que Creatomate lo entienda como segundos
+        t_start = f"{start_time} s"
+        t_dur = f"{duration} s"
+        
         elements = [
             # Fondo difuminado 9:16
             {
                 "id": "background-blur",
                 "type": "video",
-                "source": clip_source_url, # URL de YouTube
-                "trim_start": start_time,
-                "duration": duration,
+                "source": clip_source_url,
+                "trim_start": t_start,
+                "duration": t_dur,
                 "width": 1080,
                 "height": 1920,
                 "x": "50%",
@@ -769,8 +777,8 @@ def render_viral_video(clip_source_url: str, analysis: dict) -> str | None:
                 "id": "video-base",
                 "type": "video",
                 "source": clip_source_url,
-                "trim_start": start_time,
-                "duration": duration,
+                "trim_start": t_start,
+                "duration": t_dur,
                 "width": "100%",
                 "height": "auto",
                 "x": "50%",
@@ -864,6 +872,7 @@ def render_viral_video(clip_source_url: str, analysis: dict) -> str | None:
                     logger.warning(
                         f"⚠️ [{label}] Falló: {status_resp.get('errorMessage', 'sin detalles')}"
                     )
+                    logger.debug(f"DEBUG Response: {status_resp}")
                     return None
             except Exception as e:
                 logger.warning(f"⚠️ [{label}] Error al consultar estado: {e}")
