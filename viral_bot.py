@@ -504,6 +504,37 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
             last_err = Exception("Archivo vacío")
 
         logger.error(f"❌ Todos los player_clients fallaron. Último error: {last_err}")
+        
+        # v13.2 FIX: Fallback a pytubefix si yt-dlp está bloqueado por IP (Sign in to confirm you're not a bot)
+        logger.info("🔄 Intentando fallback extremo con pytubefix (po_token bypass)...")
+        try:
+            from pytubefix import YouTube
+            import subprocess
+            
+            yt = YouTube(youtube_url, use_po_token=True)
+            stream = yt.streams.filter(progressive=True, file_extension='mp4').order_by('resolution').desc().first()
+            
+            if stream:
+                dl_path = str(BASE_DIR / "full_video.mp4")
+                logger.info(f"⬇️ Descargando video completo ({stream.resolution}) para recortarlo localmente...")
+                stream.download(filename=dl_path)
+                
+                logger.info("✂️ Recortando clip temporal con ffmpeg...")
+                subprocess.run([
+                    "ffmpeg", "-y", "-i", dl_path, 
+                    "-ss", str(float(start)), "-to", str(float(end)), 
+                    "-c:v", "copy", "-c:a", "copy", out_path
+                ], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                
+                if os.path.exists(dl_path):
+                    os.remove(dl_path)
+                    
+                if os.path.exists(out_path) and os.path.getsize(out_path) > 1000:
+                    logger.info(f"✅ Clip descargado con pytubefix: {out_path} ({os.path.getsize(out_path)//1024} KB)")
+                    return out_path
+        except Exception as p_err:
+            logger.error(f"❌ Fallback pytubefix también falló: {p_err}")
+
         return None
 
     except ImportError:
