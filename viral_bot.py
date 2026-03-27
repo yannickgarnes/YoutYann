@@ -471,7 +471,8 @@ def download_clip(youtube_url: str, start: float, end: float) -> str | None:
                 },
             }
 
-            if cookie_file:
+            # Solo el cliente web soporta cookies. Android/iOS se saltarán si pasamos cookies
+            if cookie_file and client not in ("android", "ios"):
                 ydl_opts["cookiefile"] = cookie_file
 
             try:
