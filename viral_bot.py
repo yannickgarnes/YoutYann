@@ -249,48 +249,71 @@ def download_full_video(youtube_url: str) -> Optional[str]:
 
     output_path = str(settings.TEMP_DIR / "source_%(id)s.%(ext)s")
 
-    cmd = [
+    base_cmd = [
         "yt-dlp",
         "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
         "--merge-output-format", "mp4",
         "-o", output_path,
         "--no-playlist",
         "--no-check-certificates",
+        "--js-runtimes", "node",
     ]
 
-    # Add cookies if available
+    cookie_file_path = None
     cookies_content = os.environ.get("YOUTUBE_COOKIES", "")
     if cookies_content:
-        cookie_file = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False, encoding="utf-8"
-        )
-        if not cookies_content.strip().startswith("# Netscape HTTP Cookie File"):
-            cookie_file.write("# Netscape HTTP Cookie File\n")
-        cookie_file.write(cookies_content)
-        cookie_file.flush()
-        cmd.extend(["--cookies", cookie_file.name])
-        cookie_file.close()
-        logger.info("🍪 Using YouTube cookies")
+        try:
+            cookie_file = tempfile.NamedTemporaryFile(
+                mode="w", suffix=".txt", delete=False, encoding="utf-8"
+            )
+            if not cookies_content.strip().startswith("# Netscape HTTP Cookie File"):
+                cookie_file.write("# Netscape HTTP Cookie File\n")
+            cookie_file.write(cookies_content)
+            cookie_file.flush()
+            cookie_file.close()
+            cookie_file_path = cookie_file.name
+        except Exception as e:
+            logger.warning(f"⚠️ Could not write cookie file: {e}")
+            cookie_file_path = None
 
-    cmd.append(youtube_url)
+    def _run_ytdlp(use_cookies: bool) -> Optional[str]:
+        cmd = list(base_cmd)
+        if use_cookies and cookie_file_path:
+            cmd.extend(["--cookies", cookie_file_path])
+            logger.info("🍪 Using YouTube cookies")
+        cmd.append(youtube_url)
 
-    try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=300
-        )
-        if result.returncode != 0:
-            logger.error(f"❌ yt-dlp error: {result.stderr[:500]}")
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+            if result.returncode != 0:
+                # Detect expired/invalid cookies specifically
+                if use_cookies and "cookies are no longer valid" in result.stderr:
+                    logger.warning("🍪 Cookies expired — retrying without cookies...")
+                    return "RETRY_NO_COOKIES"
+                logger.error(f"❌ yt-dlp error: {result.stderr[:500]}")
+                return None
+
+            for f in settings.TEMP_DIR.glob("source_*"):
+                logger.info(f"✅ Downloaded: {f.name}")
+                return str(f)
+            return None
+        except Exception as e:
+            logger.error(f"❌ Download failed: {e}")
             return None
 
-        # Find the downloaded file
-        for f in settings.TEMP_DIR.glob("source_*"):
-            logger.info(f"✅ Downloaded: {f.name}")
-            return str(f)
-
-        return None
-    except Exception as e:
-        logger.error(f"❌ Download failed: {e}")
-        return None
+    try:
+        # Try with cookies first (if available), fallback to no-cookies
+        result = _run_ytdlp(use_cookies=bool(cookie_file_path))
+        if result == "RETRY_NO_COOKIES":
+            result = _run_ytdlp(use_cookies=False)
+        return result
+    finally:
+        if cookie_file_path:
+            try:
+                import os as _os
+                _os.unlink(cookie_file_path)
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------

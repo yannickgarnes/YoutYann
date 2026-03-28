@@ -31,6 +31,9 @@ on:
         required: false
         default: "5"
 
+permissions:
+  contents: write
+
 jobs:
   generate-shorts:
     runs-on: ubuntu-latest
