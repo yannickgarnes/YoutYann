@@ -244,21 +244,32 @@ def _parse_iso_duration(iso: str) -> int:
 # DOWNLOAD VIDEO with yt-dlp
 # ---------------------------------------------------------------------------
 def download_full_video(youtube_url: str) -> Optional[str]:
-    """Download the full video locally with yt-dlp for processing."""
+    """
+    Download the full video locally with yt-dlp.
+
+    Strategy (in order):
+    1. iOS client — bypasses YouTube bot checks on datacenter IPs (no cookies needed)
+    2. android_vr client — alternative bypass
+    3. web_creator client — fallback
+    Each attempt with cookies if available, then without.
+    """
     logger.info(f"📥 Downloading: {youtube_url}")
 
     output_path = str(settings.TEMP_DIR / "source_%(id)s.%(ext)s")
 
+    # Player clients to try — iOS bypasses bot checks on CI IPs
+    player_clients = ["ios", "android_vr", "web_creator"]
+
     base_cmd = [
         "yt-dlp",
-        "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
+        "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best[ext=mp4]/best",
         "--merge-output-format", "mp4",
         "-o", output_path,
         "--no-playlist",
         "--no-check-certificates",
-        "--js-runtimes", "node",
     ]
 
+    # Write cookie file once if available
     cookie_file_path = None
     cookies_content = os.environ.get("YOUTUBE_COOKIES", "")
     if cookies_content:
@@ -274,44 +285,61 @@ def download_full_video(youtube_url: str) -> Optional[str]:
             cookie_file_path = cookie_file.name
         except Exception as e:
             logger.warning(f"⚠️ Could not write cookie file: {e}")
-            cookie_file_path = None
 
-    def _run_ytdlp(use_cookies: bool) -> Optional[str]:
-        cmd = list(base_cmd)
+    def _run(client: str, use_cookies: bool) -> Optional[str]:
+        cmd = list(base_cmd) + [
+            "--extractor-args", f"youtube:player_client={client}",
+        ]
         if use_cookies and cookie_file_path:
             cmd.extend(["--cookies", cookie_file_path])
-            logger.info("🍪 Using YouTube cookies")
         cmd.append(youtube_url)
 
         try:
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
             if result.returncode != 0:
-                # Detect expired/invalid cookies specifically
-                if use_cookies and "cookies are no longer valid" in result.stderr:
-                    logger.warning("🍪 Cookies expired — retrying without cookies...")
-                    return "RETRY_NO_COOKIES"
-                logger.error(f"❌ yt-dlp error: {result.stderr[:500]}")
+                err = result.stderr
+                if use_cookies and "cookies are no longer valid" in err:
+                    return "EXPIRED_COOKIES"
+                if "Sign in to confirm" in err or "bot" in err.lower():
+                    return "BOT_BLOCK"
+                logger.warning(f"  ⚠️ [{client}] failed: {err[:200]}")
                 return None
 
             for f in settings.TEMP_DIR.glob("source_*"):
-                logger.info(f"✅ Downloaded: {f.name}")
+                logger.info(f"✅ Downloaded: {f.name} (client={client})")
                 return str(f)
             return None
         except Exception as e:
-            logger.error(f"❌ Download failed: {e}")
+            logger.warning(f"  ⚠️ [{client}] exception: {e}")
             return None
 
     try:
-        # Try with cookies first (if available), fallback to no-cookies
-        result = _run_ytdlp(use_cookies=bool(cookie_file_path))
-        if result == "RETRY_NO_COOKIES":
-            result = _run_ytdlp(use_cookies=False)
-        return result
+        for client in player_clients:
+            logger.info(f"  🎯 Trying player client: {client}")
+
+            # Try with cookies first if available
+            if cookie_file_path:
+                res = _run(client, use_cookies=True)
+                if res == "EXPIRED_COOKIES":
+                    logger.warning("🍪 Cookies expired, skipping cookies for all clients")
+                    cookie_file_path = None  # disable for remaining attempts
+                    res = _run(client, use_cookies=False)
+            else:
+                res = _run(client, use_cookies=False)
+
+            if res and res not in ("EXPIRED_COOKIES", "BOT_BLOCK"):
+                return res
+
+            if res != "BOT_BLOCK":
+                # Non-bot error — no point trying other clients
+                break
+
+        logger.error("❌ All player clients blocked by YouTube")
+        return None
     finally:
         if cookie_file_path:
             try:
-                import os as _os
-                _os.unlink(cookie_file_path)
+                os.unlink(cookie_file_path)
             except Exception:
                 pass
 
