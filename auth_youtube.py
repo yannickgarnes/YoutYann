@@ -1,46 +1,61 @@
-from google_auth_oauthlib.flow import InstalledAppFlow
+"""
+YouTube OAuth2 Authentication Helper.
+
+Run this locally ONCE to generate token.json,
+then store it as YOUTUBE_TOKEN_JSON secret in GitHub.
+
+Usage:
+    python auth_youtube.py
+
+Prerequisites:
+    1. Go to Google Cloud Console → APIs & Services → Credentials
+    2. Create an OAuth 2.0 Client ID (Desktop application)
+    3. Download the JSON and save as client_secret.json
+    4. Enable YouTube Data API v3
+"""
+
 import json
-import os
 from pathlib import Path
+from google_auth_oauthlib.flow import InstalledAppFlow
 
-# Define the scopes required for the YouTube Data API
-SCOPES = ['https://www.googleapis.com/auth/youtube.upload']
+SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
-def main():
-    base_dir = Path(__file__).resolve().parent
-    client_secret_file = base_dir / "client_secret.json"
-    token_file = base_dir / "token.json"
 
-    print("--- GENERADOR DE TOKEN DE YOUTUBE ---")
-    print("1. Ve a Google Cloud Console (https://console.cloud.google.com/)")
-    print("2. Asegúrate de tener un proyecto con 'YouTube Data API v3' habilitada.")
-    print("3. En 'Credenciales', crea una 'ID de cliente de OAuth 2.0' (Tipo: Aplicación de escritorio).")
-    print("4. Descarga el JSON y renómbralo a 'client_secret.json'.")
-    print(f"5. Pon ese archivo en esta carpeta: {base_dir}")
-    
-    if not client_secret_file.exists():
-        input("\n⚠️  No encuentro 'client_secret.json'. Pónlo aquí y pulsa ENTER para seguir...")
-    
-    if not client_secret_file.exists():
-        print("❌ Sigues sin poner el archivo. Abortando.")
+def authenticate():
+    """Run OAuth2 flow and save token.json."""
+    client_secret = Path("client_secret.json")
+
+    if not client_secret.exists():
+        print("❌ client_secret.json not found!")
+        print("   Download it from Google Cloud Console → Credentials")
+        print("   Save it in this directory as 'client_secret.json'")
         return
 
-    # Create the flow using the client secrets file
     flow = InstalledAppFlow.from_client_secrets_file(
-        str(client_secret_file), SCOPES)
+        str(client_secret), SCOPES
+    )
+    credentials = flow.run_local_server(port=0)
 
-    # Run the flow to retrieve the credentials (opens browser)
-    creds = flow.run_local_server(port=0)
+    token_data = {
+        "token": credentials.token,
+        "refresh_token": credentials.refresh_token,
+        "token_uri": credentials.token_uri,
+        "client_id": credentials.client_id,
+        "client_secret": credentials.client_secret,
+        "scopes": credentials.scopes,
+    }
 
-    # Save the credentials to token.json
-    token_json = creds.to_json()
-    
-    with open(token_file, 'w', encoding='utf-8') as f:
-        f.write(token_json)
+    token_file = Path("token.json")
+    with open(token_file, "w", encoding="utf-8") as f:
+        json.dump(token_data, f, indent=2)
 
-    print("\n✅ ¡ÉXITO! Se ha creado el archivo 'token.json'.")
-    print("👉 Abre ese archivo, COPIA todo el texto y pégalo en los Secretos de GitHub como 'YOUTUBE_TOKEN_JSON'.")
-    print("   (El contenido empieza por { \"token\": ... )")
+    print(f"✅ Token saved to {token_file}")
+    print()
+    print("📋 To use in GitHub Actions, copy this as YOUTUBE_TOKEN_JSON secret:")
+    print(json.dumps(token_data))
+    print()
+    print("⚠️ DO NOT commit token.json or client_secret.json to git!")
 
-if __name__ == '__main__':
-    main()
+
+if __name__ == "__main__":
+    authenticate()

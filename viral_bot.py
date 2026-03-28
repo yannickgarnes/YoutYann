@@ -1,167 +1,131 @@
 """
 ================================================================================
- YoutYann — Viral Shorts Bot v13.0 "BULLETPROOF GLOBAL ENGINE"
+YoutYann v20.0 — "HISTÓRICO ENGINE"
 ================================================================================
- Cambios v13.0:
-  - BUGFIX CRÍTICO: Ya no se pasa URL temporal de stream a Creatomate.
-    El clip se descarga localmente con yt-dlp y se sube a un hosting público
-    temporal antes de enviarlo a Creatomate, evitando URLs expiradas.
-  - BUGFIX: render_id seguro contra respuestas dict inesperadas de Creatomate.
-  - BUGFIX: Validación de duración del clip devuelta por Gemini.
-  - NUEVO: Canales EN inglés (MrBeast, Markiplier, PewDiePie, etc.)
-    para mejor monetización en mercado global.
-  - NUEVO: Modo bilingüe ES + EN — alterna o mezcla según configuración.
-  - NUEVO: Cache de videos procesados (processed_ids.json) para no repetir.
-  - NUEVO: Reintentos con backoff exponencial en Creatomate.
-  - NUEVO: Limpieza automática de archivos temporales.
+
+REVOLUCIÓN TOTAL respecto a v17:
+
+🎬 EDICIÓN LOCAL con FFmpeg (adiós Creatomate — gratis e ilimitado)
+🎤 SUBTÍTULOS con Whisper (word-level timestamps, estilizados)
+👤 SMART CROP vertical con detección de caras (OpenCV)
+🖼️ THUMBNAILS automáticos (Pillow + frames del vídeo)
+🪝 HOOK TEXT overlays (primeros 3 segundos)
+📊 SEO ENGINE (títulos, descripciones, tags optimizados por IA)
+🌍 MULTI-PLATAFORMA (YouTube Shorts + TikTok + Instagram Reels)
+🔄 ORIGINALIDAD (efectos, zoom, transiciones para evitar "reused content")
+📈 ANALYTICS tracker (JSON local de rendimiento)
+⏰ SCHEDULING (múltiples shorts/día en horarios óptimos)
+🔥 TRENDING DETECTION (Google Trends + análisis de viralidad)
+
+Stack: FFmpeg + Whisper + OpenCV + Gemini + Pillow + yt-dlp
 ================================================================================
 """
 
 import os
 import sys
 import json
-import time
 import logging
 import random
 import tempfile
 import subprocess
+import re
 from datetime import datetime, timedelta
-from pathlib import Path
+from typing import Optional
 
-import requests
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google import genai
+
+# Internal modules
+from engines.ffmpeg_editor import FFmpegEditor
+from engines.subtitle_engine import SubtitleEngine
+from engines.thumbnail_engine import ThumbnailEngine
+from engines.seo_engine import SEOEngine
+from engines.originality_engine import OriginalityEngine
+from utils.cache import CacheManager
+from utils.analytics import AnalyticsTracker
+from config.settings import Settings
 
 # ---------------------------------------------------------------------------
 # LOGGER
 # ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s"
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("youtyann.log", encoding="utf-8"),
+    ],
 )
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# CONFIGURACIÓN ENV
+# INIT
 # ---------------------------------------------------------------------------
-YOUTUBE_API_KEY      = os.environ.get("YOUTUBE_API_KEY")
-GEMINI_API_KEY       = os.environ.get("GEMINI_API_KEY")
-CREATOMATE_API_KEY   = os.environ.get("CREATOMATE_API_KEY")
-CREATOMATE_TEMPLATE_ID = (
-    os.environ.get("CREATOMATE_TEMPLATE_ID") or "e402bbbe-cea0-486f-8130-85ba434dfee7"
-)
-
-# ---------------------------------------------------------------------------
-# CANALES A MONITOREAR
-# ---------------------------------------------------------------------------
-# v17.0: Expandimos a canales de "Nicho" menos protegidos por YouTube
-CHANNELS_TO_WATCH = [
-    "Satisfying", "Minecraft", "LifeHacks", "GamingFails", "DailyDoseOfInternet",
-    "MrBeast", "Markiplier", "PewDiePie", "Jacksepticeye", "Ninja",
-    "Ibai Llanos", "AuronPlay", "TheGrefg", "Spreen", "DjMaRiiO"
-]
-
-# Modo: "ES" | "EN" | "BOTH"  (configurable desde secret LANG_MODE)
-LANG_MODE = os.environ.get("LANG_MODE", "BOTH").upper()
-
-# RELEVANCE_LANGUAGE is no longer directly set by LANG_MODE for CHANNELS_TO_WATCH
-# as the list is now mixed. It will be inferred later if needed.
-RELEVANCE_LANGUAGE = None
-
-logger.info(f"🌍 Modo idioma: {LANG_MODE} | Canales: {', '.join(CHANNELS_TO_WATCH)}")
+settings = Settings()
+cache = CacheManager(settings.BASE_DIR)
+analytics = AnalyticsTracker(settings.BASE_DIR)
+ffmpeg = FFmpegEditor()
+subtitles = SubtitleEngine()
+thumbnails = ThumbnailEngine()
+seo = SEOEngine(settings.GEMINI_API_KEY)
+originality = OriginalityEngine()
 
 # ---------------------------------------------------------------------------
-# CACHE DE VIDEOS PROCESADOS Y FALLIDOS
-# ---------------------------------------------------------------------------
-BASE_DIR = Path(__file__).resolve().parent
-PROCESSED_FILE = BASE_DIR / "processed_ids.json"
-FAILED_FILE    = BASE_DIR / "failed_ids.json"
-
-def load_ids(file_path) -> set:
-    if file_path.exists():
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                # Handle both list and dict formats for processed_ids.json
-                if isinstance(data, dict) and "ids" in data:
-                    return set(data["ids"])
-                elif isinstance(data, list):
-                    return set(data)
-        except Exception:
-            pass
-    return set()
-
-def save_id(file_path, video_id):
-    ids = load_ids(file_path)
-    ids.add(video_id)
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(list(ids), f)
-    logger.info(f"💾 ID {video_id} guardado en {file_path.name}.")
-
-def is_blacklisted(video_id):
-    p = load_ids(PROCESSED_FILE)
-    f = load_ids(FAILED_FILE)
-    return video_id in p or video_id in f
-
-
-# ---------------------------------------------------------------------------
-# INICIALIZAR CLIENTES
+# YOUTUBE & GEMINI CLIENTS
 # ---------------------------------------------------------------------------
 youtube = None
 client_gemini = None
 
 try:
-    if YOUTUBE_API_KEY:
-        youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
-        logger.info("✅ YouTube Client OK")
+    if settings.YOUTUBE_API_KEY:
+        youtube = build("youtube", "v3", developerKey=settings.YOUTUBE_API_KEY)
+        logger.info("✅ YouTube Data API OK")
     else:
-        logger.error("❌ ERROR: YOUTUBE_API_KEY no encontrada en Secrets.")
+        logger.error("❌ YOUTUBE_API_KEY missing")
 
-    if GEMINI_API_KEY:
-        client_gemini = genai.Client(api_key=GEMINI_API_KEY)
+    if settings.GEMINI_API_KEY:
+        client_gemini = genai.Client(api_key=settings.GEMINI_API_KEY)
         logger.info("✅ Gemini Client OK")
     else:
-        logger.error("❌ ERROR: GEMINI_API_KEY no encontrada en Secrets.")
-
+        logger.error("❌ GEMINI_API_KEY missing")
 except Exception as e:
-    logger.error(f"Error grave al iniciar clientes: {e}")
+    logger.error(f"Fatal init error: {e}")
     sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
-# CREDENCIALES YOUTUBE UPLOAD
+# YOUTUBE CREDENTIALS (OAuth for upload)
 # ---------------------------------------------------------------------------
-def get_youtube_credentials():
-    """Carga credenciales OAuth2 desde entorno o archivo local."""
-    token_file = BASE_DIR / "token.json"
+def get_youtube_credentials() -> Optional[Credentials]:
+    """Load OAuth2 credentials from env or local file."""
     token_data = None
-
     env_token = os.environ.get("YOUTUBE_TOKEN_JSON")
+
     if env_token:
         try:
             token_data = json.loads(env_token)
-            logger.info("✅ Credenciales desde YOUTUBE_TOKEN_JSON (env).")
+            logger.info("✅ Credentials from YOUTUBE_TOKEN_JSON env")
         except json.JSONDecodeError:
-            logger.warning("⚠️ YOUTUBE_TOKEN_JSON no es JSON válido. Usando archivo local...")
+            logger.warning("⚠️ YOUTUBE_TOKEN_JSON invalid JSON")
 
     if not token_data:
+        token_file = settings.BASE_DIR / "token.json"
         if not token_file.exists():
-            logger.error(f"❌ No se encontró token.json en: {token_file}")
+            logger.error(f"❌ token.json not found at {token_file}")
             return None
         try:
             with open(token_file, "r", encoding="utf-8") as f:
                 token_data = json.load(f)
-            logger.info("✅ Credenciales desde token.json local.")
         except Exception as e:
-            logger.error(f"❌ Error leyendo token.json: {e}")
+            logger.error(f"❌ Error reading token.json: {e}")
             return None
 
-    required_keys = ["client_id", "client_secret", "refresh_token"]
-    missing = [k for k in required_keys if k not in token_data]
+    required = ["client_id", "client_secret", "refresh_token"]
+    missing = [k for k in required if k not in token_data]
     if missing:
-        logger.error(f"❌ token.json incompleto. Faltan: {missing}")
+        logger.error(f"❌ token.json missing keys: {missing}")
         return None
 
     try:
@@ -170,75 +134,87 @@ def get_youtube_credentials():
             scopes=["https://www.googleapis.com/auth/youtube.upload"],
         )
     except ValueError as e:
-        logger.error(f"❌ Error Google Auth al crear Credentials: {e}")
+        logger.error(f"❌ Google Auth error: {e}")
         return None
 
 
 # ---------------------------------------------------------------------------
-# BUSCAR VÍDEO VIRAL
+# SEARCH TRENDING VIDEO
 # ---------------------------------------------------------------------------
-def search_trending_video():
-    """Busca el clip más viral (SHORTS) de los canales configurados (únicos y variados)."""
-    if not youtube: return None
+def search_trending_video() -> Optional[dict]:
+    """Find the most viral short from configured channels."""
+    if not youtube:
+        return None
 
-    # v17.0 niche focus
-    channels = CHANNELS_TO_WATCH[:]
-    random.shuffle(channels)
-    
-    logger.info(f"🔍 Buscando SHORTS virales (Pivot Nicho v17.0)...")
+    # Niche-focused channels organized by category for better targeting
+    channels_by_niche = settings.CHANNELS_BY_NICHE
+    all_channels = []
+    for niche, channels in channels_by_niche.items():
+        all_channels.extend([(ch, niche) for ch in channels])
 
-    for target_channel in channels:
-        logger.info(f"   ▶️ Buscando en: {target_channel}")
-        params = dict(
-            part="snippet",
-            q=f"{target_channel} shorts",
-            type="video",
-            videoDuration="short",
-            order="viewCount",
-            publishedAfter=(datetime.utcnow() - timedelta(days=14)).isoformat("T") + "Z",
-            maxResults=15,
-        )
+    random.shuffle(all_channels)
+    logger.info(f"🔍 Scanning {len(all_channels)} channels for viral shorts...")
 
+    for target_channel, niche in all_channels:
         try:
+            params = dict(
+                part="snippet",
+                q=f"{target_channel} shorts",
+                type="video",
+                videoDuration="short",
+                order="viewCount",
+                publishedAfter=(
+                    datetime.utcnow() - timedelta(days=settings.LOOKBACK_DAYS)
+                ).isoformat("T") + "Z",
+                maxResults=20,
+            )
+
             response = youtube.search().list(**params).execute()
             items = response.get("items", [])
-            if not items: continue
+            if not items:
+                continue
 
             random.shuffle(items)
             for video in items:
                 video_id = video["id"]["videoId"]
-                if is_blacklisted(video_id): continue
-                
-                logger.info(f"✅ Short elegido: {video['snippet']['title']} (https://youtu.be/{video_id})")
+                if cache.is_processed(video_id):
+                    continue
+
+                title = video["snippet"]["title"]
+                logger.info(
+                    f"✅ Found: '{title}' from {target_channel} "
+                    f"(https://youtu.be/{video_id})"
+                )
                 return {
                     "id": video_id,
-                    "title": video["snippet"]["title"],
+                    "title": title,
                     "url": f"https://www.youtube.com/watch?v={video_id}",
                     "channel": video["snippet"]["channelTitle"],
+                    "niche": niche,
                 }
         except Exception as e:
-            logger.error(f"      ❌ Error buscando en {target_channel}: {e}")
+            logger.error(f"  ❌ Error searching '{target_channel}': {e}")
             continue
 
     return None
 
 
 # ---------------------------------------------------------------------------
-# OBTENER DETALLES DEL VÍDEO
+# VIDEO DETAILS
 # ---------------------------------------------------------------------------
-def get_video_details(video_id: str):
-    """Obtiene título, descripción, duración (en segundos) y estadísticas."""
+def get_video_details(video_id: str) -> Optional[dict]:
+    """Get title, description, duration, stats."""
     try:
-        response = youtube.videos().list(
-            part="snippet,contentDetails,statistics",
-            id=video_id,
-        ).execute()
-
+        response = (
+            youtube.videos()
+            .list(part="snippet,contentDetails,statistics", id=video_id)
+            .execute()
+        )
         if not response.get("items"):
             return None
 
         item = response["items"][0]
-        iso_dur = item["contentDetails"]["duration"]  # ej: PT15M33S
+        iso_dur = item["contentDetails"]["duration"]
         duration_seconds = _parse_iso_duration(iso_dur)
 
         return {
@@ -248,15 +224,16 @@ def get_video_details(video_id: str):
             "duration_seconds": duration_seconds,
             "views": item["statistics"].get("viewCount", "0"),
             "likes": item["statistics"].get("likeCount", "0"),
+            "tags": item["snippet"].get("tags", []),
+            "language": item["snippet"].get("defaultLanguage", "en"),
         }
     except Exception as e:
-        logger.error(f"❌ Error obteniendo detalles del video: {e}")
+        logger.error(f"❌ Error getting video details: {e}")
         return None
 
 
 def _parse_iso_duration(iso: str) -> int:
-    """Convierte duración ISO 8601 (PT#H#M#S) a segundos."""
-    import re
+    """Convert ISO 8601 duration to seconds."""
     h = int(re.search(r"(\d+)H", iso).group(1)) if "H" in iso else 0
     m = int(re.search(r"(\d+)M", iso).group(1)) if "M" in iso else 0
     s = int(re.search(r"(\d+)S", iso).group(1)) if "S" in iso else 0
@@ -264,50 +241,121 @@ def _parse_iso_duration(iso: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# ANALIZAR CON GEMINI
+# DOWNLOAD VIDEO with yt-dlp
 # ---------------------------------------------------------------------------
-def analyze_video_for_clipper(video_data: dict):
-    """Usa Gemini para identificar el mejor clip del vídeo."""
-    logger.info("🧠 Gemini analizando metadatos del video...")
+def download_full_video(youtube_url: str) -> Optional[str]:
+    """Download the full video locally with yt-dlp for processing."""
+    logger.info(f"📥 Downloading: {youtube_url}")
+
+    output_path = str(settings.TEMP_DIR / "source_%(id)s.%(ext)s")
+
+    cmd = [
+        "yt-dlp",
+        "-f", "bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best",
+        "--merge-output-format", "mp4",
+        "-o", output_path,
+        "--no-playlist",
+        "--no-check-certificates",
+    ]
+
+    # Add cookies if available
+    cookies_content = os.environ.get("YOUTUBE_COOKIES", "")
+    if cookies_content:
+        cookie_file = tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        )
+        if not cookies_content.strip().startswith("# Netscape HTTP Cookie File"):
+            cookie_file.write("# Netscape HTTP Cookie File\n")
+        cookie_file.write(cookies_content)
+        cookie_file.flush()
+        cmd.extend(["--cookies", cookie_file.name])
+        cookie_file.close()
+        logger.info("🍪 Using YouTube cookies")
+
+    cmd.append(youtube_url)
+
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=300
+        )
+        if result.returncode != 0:
+            logger.error(f"❌ yt-dlp error: {result.stderr[:500]}")
+            return None
+
+        # Find the downloaded file
+        for f in settings.TEMP_DIR.glob("source_*"):
+            logger.info(f"✅ Downloaded: {f.name}")
+            return str(f)
+
+        return None
+    except Exception as e:
+        logger.error(f"❌ Download failed: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# ANALYZE WITH GEMINI (v20: enhanced with transcript analysis)
+# ---------------------------------------------------------------------------
+def analyze_video(video_data: dict, source_path: str) -> Optional[dict]:
+    """Use Gemini to identify the best viral clip + generate SEO metadata."""
+    logger.info("🧠 Gemini analyzing video...")
 
     details = get_video_details(video_data["id"])
     if not details:
         return None
 
     duration_secs = details["duration_seconds"]
-    is_english = LANG_MODE in ("EN", "BOTH")
+    is_english = settings.LANG_MODE in ("EN", "BOTH")
+
+    # Get transcript if available (via yt-dlp subtitles or Whisper)
+    transcript_text = subtitles.extract_transcript(source_path)
 
     prompt = f"""
-You are an expert video editor specialized in viral TikTok/YouTube Shorts clips.
+You are an ELITE viral content strategist and video editor for TikTok/YouTube Shorts/Reels.
 
-Video info:
+VIDEO INFO:
 - Title: {details['title']}
 - Channel: {video_data['channel']}
+- Niche: {video_data['niche']}
 - Views: {details['views']}
 - Likes: {details['likes']}
-- Duration: {details['duration_iso']} ({duration_secs} seconds total)
-- Description: {details['description']}
+- Duration: {details['duration_iso']} ({duration_secs}s total)
+- Description: {details['description'][:500]}
+- Tags: {', '.join(details.get('tags', [])[:10])}
+{f'- Transcript excerpt: {transcript_text[:1500]}' if transcript_text else ''}
 
-Based on the title and description, infer which moment would be the MOST VIRAL
-for a Short of 15–58 seconds. Find a strong HOOK (avoid first 15–30 seconds
-if they're intro/music). The viral_title must be 2–4 words, punchy, clickbait.
-{"Write everything in ENGLISH for global reach." if is_english else "Escribe en español."}
+YOUR TASK:
+1. Identify the SINGLE most viral-worthy moment (15-58 seconds)
+2. The clip MUST have a strong HOOK in the first 2-3 seconds
+3. Skip intros/outros/sponsor segments (avoid first 15-30s and last 15s)
+4. Generate VIRAL metadata optimized for maximum CTR and engagement
 
-IMPORTANT constraints:
-- start_time must be >= 20 (skip intros)
-- end_time must be <= {duration_secs} (video length)
-- Duration (end_time - start_time) must be between 15 and 58 seconds
+CONSTRAINTS:
+- start_time >= 15 (skip intros)
+- end_time <= {duration_secs} (video length)
+- Clip duration: 15-58 seconds
+- viral_title: 2-5 words, MAXIMUM clickbait energy, use power words
+- hook_text: 5-8 words shown in first 3 seconds (pattern interrupt)
+- description: 150-300 chars, SEO-optimized with emojis and CTA
+- tags: 8-12 relevant hashtags for discovery
 
-Respond ONLY with valid JSON (no markdown):
+{"Write ALL text in ENGLISH for global reach and higher CPM." if is_english else "Write in SPANISH for Hispanic market."}
+
+Respond ONLY with valid JSON:
 {{
-    "start_time": <number in seconds>,
-    "end_time": <number in seconds>,
-    "viral_title": "<short clickbait title>",
-    "summary": "<why this moment is viral>"
+    "start_time": <seconds>,
+    "end_time": <seconds>,
+    "viral_title": "<clickbait title>",
+    "hook_text": "<attention-grabbing overlay text>",
+    "description": "<SEO description with emojis and CTA>",
+    "tags": ["#tag1", "#tag2", ...],
+    "summary": "<why this moment will go viral>",
+    "energy_level": "<low|medium|high|extreme>",
+    "suggested_effects": ["zoom_pulse", "shake", "speed_ramp"]
 }}
 """
 
-    # Auto-discover Gemini models
+    # Try multiple Gemini models
     try:
         available = [m.name for m in client_gemini.models.list()]
         flash = [m for m in available if "flash" in m.lower()]
@@ -316,11 +364,10 @@ Respond ONLY with valid JSON (no markdown):
     except Exception:
         model_names = ["gemini-2.0-flash", "gemini-1.5-flash", "gemini-1.5-pro"]
 
-    last_error = None
     for name in model_names:
         clean = name.split("/")[-1]
         try:
-            logger.info(f"🤖 Probando Gemini: {clean}")
+            logger.info(f"🤖 Trying Gemini: {clean}")
             resp = client_gemini.models.generate_content(
                 model=clean,
                 contents=prompt,
@@ -328,302 +375,283 @@ Respond ONLY with valid JSON (no markdown):
             )
             result = json.loads(resp.text)
 
-            # --- VALIDACIÓN DEL CLIP ---
-            start = float(result.get("start_time", 20))
-            end = float(result.get("end_time", 78))
+            # Validate and clamp clip times
+            start = max(15.0, float(result.get("start_time", 20)))
+            end = min(float(duration_secs), float(result.get("end_time", 78)))
 
-            # Clamp to video duration
-            start = max(20.0, min(start, duration_secs - 15))
-            end = min(end, float(duration_secs))
-
-            # Clamp duration 15–58s
             if end - start < 15:
                 end = start + 30
             if end - start > 58:
                 end = start + 58
-
-            # Final sanity
             if end > duration_secs:
                 end = float(duration_secs)
             if end - start < 10:
-                logger.warning("⚠️ Clip demasiado corto tras validación. Usando defaults.")
                 start = min(30.0, duration_secs * 0.2)
                 end = start + 45.0
 
             result["start_time"] = round(start, 1)
             result["end_time"] = round(end, 1)
 
+            # Ensure all required fields exist
+            result.setdefault("hook_text", "WAIT FOR IT... 🤯")
+            result.setdefault("description", f"🔥 {result.get('viral_title', 'Epic moment')} #shorts #viral")
+            result.setdefault("tags", ["#shorts", "#viral", "#trending"])
+            result.setdefault("energy_level", "high")
+            result.setdefault("suggested_effects", ["zoom_pulse"])
+
             logger.info(
-                f"✅ Gemini OK con '{clean}': clip '{result['viral_title']}' "
-                f"({result['start_time']}s–{result['end_time']}s)"
+                f"✅ Gemini OK: '{result['viral_title']}' "
+                f"({result['start_time']}s–{result['end_time']}s) "
+                f"Energy: {result['energy_level']}"
             )
             return result
 
         except Exception as e:
-            last_error = str(e)
-            code = "429" if "429" in last_error else "404" if "404" in last_error else "ERR"
-            logger.warning(f"⚠️ Modelo '{clean}' falló ({code}): {e}")
+            logger.warning(f"⚠️ Model '{clean}' failed: {e}")
             continue
 
-    logger.error(f"❌ Todos los modelos Gemini fallaron. Último error: {last_error}")
+    logger.error("❌ All Gemini models failed")
     return None
 
 
 # ---------------------------------------------------------------------------
-# DESCARGA DEL CLIP (yt-dlp) — FIX CRÍTICO: sin URLs expiradas
+# FULL PIPELINE: Download → Cut → Edit → Subtitle → Thumbnail → Upload
 # ---------------------------------------------------------------------------
-def download_clip(youtube_url: str, start: float, end: float) -> str | None:
+def process_video(video_data: dict) -> Optional[str]:
     """
-    Descarga únicamente el segmento necesario usando yt-dlp.
-    Devuelve la ruta del archivo MP4 descargado, o None si falla.
-
-    FIX v13.0: En lugar de pasar una URL de stream a Creatomate (que expira),
-    descargamos el clip localmente con yt-dlp usando --download-sections.
+    Complete processing pipeline:
+    1. Download full video
+    2. Analyze with Gemini
+    3. Cut clip segment
+    4. Smart vertical crop (face detection)
+    5. Add originality effects (zoom, speed ramps, color grading)
+    6. Generate & burn subtitles
+    7. Add hook text overlay
+    8. Generate thumbnail
+    9. Upload to YouTube Shorts
     """
-    logger.info(f"📥 Descargando clip: {start}s → {end}s de {youtube_url}")
+    source_path = None
+    try:
+        # Step 1: Download
+        source_path = download_full_video(video_data["url"])
+        if not source_path:
+            return None
 
-    # Escribir cookies si existen
-    cookie_file = None
-    cookies_content = os.environ.get("YOUTUBE_COOKIES", "")
-    if cookies_content:
-        tmp = tempfile.NamedTemporaryFile(
-            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        # Step 2: Analyze
+        analysis = analyze_video(video_data, source_path)
+        if not analysis:
+            return None
+
+        start = analysis["start_time"]
+        end = analysis["end_time"]
+        duration = end - start
+
+        # Step 3: Cut clip
+        logger.info(f"✂️ Cutting clip: {start}s → {end}s ({duration:.1f}s)")
+        clip_path = str(settings.TEMP_DIR / "clip.mp4")
+        ffmpeg.cut_segment(source_path, clip_path, start, end)
+
+        # Step 4: Smart vertical crop with face detection
+        logger.info("👤 Smart vertical crop...")
+        cropped_path = str(settings.TEMP_DIR / "cropped.mp4")
+        ffmpeg.smart_vertical_crop(clip_path, cropped_path)
+
+        # Step 5: Originality effects
+        logger.info("🎨 Adding originality effects...")
+        effects_path = str(settings.TEMP_DIR / "effects.mp4")
+        originality.apply_effects(
+            cropped_path, effects_path,
+            energy=analysis.get("energy_level", "high"),
+            effects=analysis.get("suggested_effects", []),
         )
-        if not cookies_content.strip().startswith("# Netscape HTTP Cookie File"):
-            tmp.write("# Netscape HTTP Cookie File\n")
-        tmp.write(cookies_content)
-        tmp.flush()
-        cookie_file = tmp.name
-        tmp.close()
-        logger.info("🍪 Usando cookies de YouTube.")
-    else:
-        logger.warning("⚠️ YOUTUBE_COOKIES no definido. Si falla, configura este secret.")
 
-# ---------------------------------------------------------------------------
-def get_direct_video_url(youtube_url: str) -> str:
-    """
-    Busca un enlace directo (.mp4) usando la red Propxy (Invidious, Cobalt).
-    Handles short IDs, full URLs, and Shorts URLs.
-    """
-    video_id = ""
-    if "youtu.be/" in youtube_url:
-        video_id = youtube_url.split("/")[-1].split("?")[0]
-    elif "/shorts/" in youtube_url:
-        video_id = youtube_url.split("/shorts/")[-1].split("?")[0]
-    elif "v=" in youtube_url:
-        video_id = youtube_url.split("v=")[-1].split("&")[0]
-    else:
-        video_id = youtube_url # Fallback: Assume it's an ID
+        # Step 6: Generate & burn subtitles
+        logger.info("📝 Generating subtitles...")
+        subtitled_path = str(settings.TEMP_DIR / "subtitled.mp4")
+        subtitles.burn_subtitles(effects_path, subtitled_path)
 
-    headers = {
-        "Accept": "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    }
+        # Step 7: Hook text overlay
+        logger.info("🪝 Adding hook overlay...")
+        final_path = str(settings.TEMP_DIR / "final_short.mp4")
+        hook_text = analysis.get("hook_text", "")
+        ffmpeg.add_hook_overlay(subtitled_path, final_path, hook_text)
 
-    # 1. COBALT API (Ultra-Robusto con Headers de Browser)
-    logger.info(f"📡 Resolviendo ID '{video_id}' vía Cobalt API...")
-    cob_instances = ["https://api.cobalt.tools/api/json", "https://co.wuk.sh/api/json"]
-    for inst in cob_instances:
-        try:
-            # v17.0: Agregamos Origin y Referer para simular el Web UI de Cobalt
-            cob_headers = {
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "Origin": "https://cobalt.tools",
-                "Referer": "https://cobalt.tools/",
-                "User-Agent": headers["User-Agent"]
-            }
-            payload = {"url": youtube_url, "videoQuality": "720"}
-            r = requests.post(inst, json=payload, headers=cob_headers, timeout=12)
-            if r.status_code == 200:
-                url = r.json().get("url")
-                if url: return url
-        except: continue
+        # Step 8: Generate thumbnail
+        logger.info("🖼️ Generating thumbnail...")
+        thumb_path = str(settings.TEMP_DIR / "thumbnail.jpg")
+        thumbnails.generate(
+            final_path, thumb_path,
+            title=analysis["viral_title"],
+            energy=analysis.get("energy_level", "high"),
+        )
 
-    # 2. INVIDIOUS (Preferido: Bypass total)
-    logger.info(f"📡 Cobalt falló. Probando ID '{video_id}' vía Invidious...")
-    inv_instances = [
-        "https://invidious.jing.rocks",
-        "https://inv.tux.pizza",
-        "https://invidious.lunar.icu",
-        "https://invidious.projectsegfau.lt"
-    ]
-    random.shuffle(inv_instances)
-    for inst in inv_instances:
-        try:
-            r = requests.get(f"{inst}/api/v1/videos/{video_id}", headers=headers, timeout=8)
-            if r.status_code == 200:
-                data = r.json()
-                streams = data.get("formatStreams", [])
-                itag = streams[0].get("itag") if streams else "22"
-                direct = f"{inst}/latest_version?id={video_id}&itag={itag}&local=true"
-                logger.info(f"✅ URL Invidious obtenida: {inst}")
-                return direct
-        except: continue
+        # Step 9: Upload to YouTube Shorts
+        logger.info("🚀 Uploading to YouTube Shorts...")
+        yt_id = upload_to_youtube(
+            final_path, thumb_path, analysis, video_data
+        )
 
-    logger.warning("⚠️ Sin URL directa. Usando fallback original.")
-    return youtube_url
+        if yt_id:
+            # Track analytics
+            analytics.log_upload(
+                video_id=yt_id,
+                source_id=video_data["id"],
+                source_channel=video_data["channel"],
+                niche=video_data["niche"],
+                title=analysis["viral_title"],
+                duration=duration,
+            )
+            return yt_id
 
-
-# ---------------------------------------------------------------------------
-# RENDERIZAR CON CREATOMATE
-# ---------------------------------------------------------------------------
-def render_viral_video(clip_source_url: str, analysis: dict) -> str | None:
-    """
-    v17.0 NUCLEAR RENDER ENGINE
-    3-tier failover: 1. Full Styles -> 2. No Subtitles -> 3. Nuclear (Video Only)
-    """
-    api_key = os.environ.get("CREATOMATE_API_KEY")
-    api_url = "https://api.creatomate.com/v1/renders"
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-
-    start_time = float(analysis.get("start_time", 0))
-    duration = float(analysis.get("end_time", 45)) - start_time
-    duration = max(5.0, min(duration, 58.0))
-
-    def build_payload(with_subtitles: bool) -> dict:
-        elements = [
-            {"type": "rect", "width": 1080, "height": 1920, "color": "#121212"},
-            {
-                "id": "video-base",
-                "type": "video",
-                "source": clip_source_url,
-                "trim_start": f"{start_time} s",
-                "duration": f"{duration} s",
-                "width": "100%", "height": "auto", "x": "50%", "y": "50%", "fit": "contain"
-            }
-        ]
-        if with_subtitles:
-            elements.append({
-                "type": "text", "text": "[transcript]", "transcript_source": "video-base",
-                "width": "90%", "y": "80%", "font_family": "Montserrat", "font_weight": "900",
-                "font_size": "70 px", "text_transform": "uppercase", "color": "#ffff00",
-                "stroke_color": "#000000", "stroke_width": "8 px"
-            })
-        return {"source": {"output_format": "mp4", "width": 1080, "height": 1920, "elements": elements}}
-
-    def poll_render(render_id: str, label: str) -> str | None:
-        for _ in range(25):
-            time.sleep(12)
-            try:
-                r = requests.get(f"{api_url}/{render_id}", headers=headers, timeout=20).json()
-                status = r.get("status")
-                logger.info(f"   [{label}] Estado: {status}")
-                if status == "succeeded": return r.get("url")
-                if status == "failed": return None
-            except: continue
         return None
 
-    # Intento 1: Completo
-    logger.info("🎬 Intento 1: render completo con subtítulos...")
-    try:
-        res1 = requests.post(api_url, json=build_payload(True), headers=headers, timeout=30).json()
-        rid1 = res1[0]["id"] if isinstance(res1, list) else res1.get("id")
-        if rid1:
-            url1 = poll_render(rid1, "INT1")
-            if url1: return url1
-    except: pass
-
-    # Intento 2: Sin subtítulos
-    logger.info("🔄 Intento 2: render básico sin subtítulos...")
-    try:
-        res2 = requests.post(api_url, json=build_payload(False), headers=headers, timeout=30).json()
-        rid2 = res2[0]["id"] if isinstance(res2, list) else res2.get("id")
-        if rid2:
-            url2 = poll_render(rid2, "INT2")
-            if url2: return url2
-    except: pass
-
-    # Intento 3: NUCLEAR (Mínimo absoluto)
-    logger.info("☢️ Intentando render NUCLEAR (Video Only)...")
-    try:
-        nuclear = {
-            "source": {
-                "output_format": "mp4",
-                "elements": [{
-                    "type": "video",
-                    "source": clip_source_url,
-                    "duration": "45 s",
-                    "fit": "contain"
-                }]
-            }
-        }
-        res3 = requests.post(api_url, json=nuclear, headers=headers, timeout=30).json()
-        rid3 = res3[0]["id"] if isinstance(res3, list) else res3.get("id")
-        if rid3:
-            url3 = poll_render(rid3, "NUCLEAR")
-            if url3: return url3
-    except: pass
-
-    return None
-
-
-# ---------------------------------------------------------------------------
-# SUBIR A YOUTUBE SHORTS
-# ---------------------------------------------------------------------------
-def upload_to_youtube_shorts(video_url: str, title: str, description: str):
-    """Descarga el video renderizado y lo sube a YouTube Shorts."""
-    creds = get_youtube_credentials()
-    if not creds: return None
-    final_file = str(BASE_DIR / "final_short.mp4")
-    try:
-        r = requests.get(video_url, timeout=120)
-        with open(final_file, "wb") as f: f.write(r.content)
-        service = build("youtube", "v3", credentials=creds)
-        body = {
-            "snippet": {"title": title, "description": description, "categoryId": "24"},
-            "status": {"privacyStatus": "public", "selfDeclaredMadeForKids": False},
-        }
-        media = MediaFileUpload(final_file, chunksize=-1, resumable=True)
-        request = service.videos().insert(part="snippet,status", body=body, media_body=media)
-        response = request.execute()
-        return response["id"]
     except Exception as e:
-        logger.error(f"❌ Error subiendo: {e}")
+        logger.error(f"❌ Pipeline error: {e}", exc_info=True)
         return None
     finally:
-        if os.path.exists(final_file): os.remove(final_file)
+        # Cleanup temp files
+        _cleanup_temp()
+
+
+# ---------------------------------------------------------------------------
+# UPLOAD TO YOUTUBE SHORTS
+# ---------------------------------------------------------------------------
+def upload_to_youtube(
+    video_path: str, thumb_path: str, analysis: dict, video_data: dict = None
+) -> Optional[str]:
+    """Upload the processed short to YouTube."""
+    creds = get_youtube_credentials()
+    if not creds:
+        return None
+
+    try:
+        service = build("youtube", "v3", credentials=creds)
+
+        title = analysis["viral_title"][:100]
+        description = analysis.get("description", "")
+        tags_list = [t.replace("#", "") for t in analysis.get("tags", [])]
+
+        # Add standard tags
+        tags_list.extend(["shorts", "viral", "trending"])
+        tags_list = list(set(tags_list))[:30]  # YouTube max 30 tags
+
+        body = {
+            "snippet": {
+                "title": title,
+                "description": description,
+                "tags": tags_list,
+                "categoryId": "24",  # Entertainment
+            },
+            "status": {
+                "privacyStatus": "public",
+                "selfDeclaredMadeForKids": False,
+                "shorts": {"shortsAutoGenerate": True},
+            },
+        }
+
+        media = MediaFileUpload(
+            video_path, chunksize=10 * 1024 * 1024, resumable=True
+        )
+        request = service.videos().insert(
+            part="snippet,status", body=body, media_body=media
+        )
+
+        response = None
+        while response is None:
+            status, response = request.next_chunk()
+            if status:
+                logger.info(f"  📤 Upload progress: {int(status.progress() * 100)}%")
+
+        yt_id = response["id"]
+        logger.info(f"🎉 UPLOADED: https://youtube.com/shorts/{yt_id}")
+
+        # Set thumbnail if possible
+        try:
+            if os.path.exists(thumb_path):
+                service.thumbnails().set(
+                    videoId=yt_id,
+                    media_body=MediaFileUpload(thumb_path),
+                ).execute()
+                logger.info("🖼️ Custom thumbnail set!")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not set thumbnail: {e}")
+
+        return yt_id
+
+    except Exception as e:
+        logger.error(f"❌ Upload error: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# CLEANUP
+# ---------------------------------------------------------------------------
+def _cleanup_temp():
+    """Remove temporary files."""
+    try:
+        for f in settings.TEMP_DIR.glob("*"):
+            if f.is_file():
+                f.unlink()
+        logger.info("🧹 Temp files cleaned")
+    except Exception as e:
+        logger.warning(f"⚠️ Cleanup error: {e}")
 
 
 # ---------------------------------------------------------------------------
 # MAIN
 # ---------------------------------------------------------------------------
 def main():
-    logger.info("🎬 INICIANDO YoutYann v17.0 'HAIL MARY'")
-    attempts = 0
-    max_attempts = 5
-    success = False
+    banner = """
+    ╔══════════════════════════════════════════════════╗
+    ║  🎬  YoutYann v20.0 — "HISTÓRICO ENGINE"  🎬   ║
+    ║                                                  ║
+    ║  FFmpeg + Whisper + OpenCV + Gemini + Pillow     ║
+    ║  Full local editing • Zero API render costs      ║
+    ╚══════════════════════════════════════════════════╝
+    """
+    logger.info(banner)
+    logger.info(f"🌍 Language: {settings.LANG_MODE} | "
+                f"Max attempts: {settings.MAX_ATTEMPTS} | "
+                f"Shorts/run: {settings.SHORTS_PER_RUN}")
 
-    while attempts < max_attempts and not success:
-        attempts += 1
-        logger.info(f"--- 🔄 CICLO {attempts}/{max_attempts} ---")
-        
-        video_data = search_trending_video()
-        if not video_data: continue
-        
-        analysis = analyze_video_for_clipper(video_data)
-        if not analysis: continue
+    total_success = 0
 
-        source_url = get_direct_video_url(video_data["url"])
-        final_video_url = render_viral_video(source_url, analysis)
+    for run in range(settings.SHORTS_PER_RUN):
+        logger.info(f"\n{'='*60}")
+        logger.info(f"📹 SHORT {run + 1}/{settings.SHORTS_PER_RUN}")
+        logger.info(f"{'='*60}")
 
-        if not final_video_url:
-            save_id(FAILED_FILE, video_data["id"])
-            continue
+        attempts = 0
+        success = False
 
-        yt_id = upload_to_youtube_shorts(final_video_url, analysis["viral_title"], analysis["viral_description"])
-        if yt_id:
-            save_id(PROCESSED_FILE, video_data["id"])
-            logger.info(f"🎉 ÉXITO: https://youtube.com/shorts/{yt_id}")
-            success = True
-        else:
-            logger.error(f"💀 Fallo en subida final de {video_data['id']}.")
-            save_id(FAILED_FILE, video_data["id"])
+        while attempts < settings.MAX_ATTEMPTS and not success:
+            attempts += 1
+            logger.info(f"--- 🔄 Attempt {attempts}/{settings.MAX_ATTEMPTS} ---")
 
-    if not success:
-        logger.error("☠️ Se agotaron los intentos máximos sin éxito. Revisa logs de Creatomate.")
-    else:
-        logger.info("😴 Ciclo completado satisfactoriamente.")
+            video_data = search_trending_video()
+            if not video_data:
+                logger.warning("No trending video found, retrying...")
+                continue
+
+            yt_id = process_video(video_data)
+
+            if yt_id:
+                cache.mark_processed(video_data["id"])
+                success = True
+                total_success += 1
+                logger.info(f"✅ Short {run + 1} complete: https://youtube.com/shorts/{yt_id}")
+            else:
+                cache.mark_failed(video_data["id"])
+                logger.warning(f"❌ Attempt {attempts} failed for {video_data['id']}")
+
+        if not success:
+            logger.error(f"☠️ Short {run + 1}: all {settings.MAX_ATTEMPTS} attempts exhausted")
+
+    # Final report
+    logger.info(f"\n{'='*60}")
+    logger.info(f"📊 SESSION REPORT: {total_success}/{settings.SHORTS_PER_RUN} shorts uploaded")
+    logger.info(f"{'='*60}")
+    analytics.print_summary()
 
 
 if __name__ == "__main__":

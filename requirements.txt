@@ -1,8 +1,25 @@
+# ═══════════════════════════════════════
+# YoutYann v20.0 Dependencies
+# ═══════════════════════════════════════
+
+# Google APIs
 google-api-python-client
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
 google-genai
+
+# HTTP
 requests
+
+# Video download
 yt-dlp
-pytubefix
+
+# Subtitles (optional but recommended — GPU: faster-whisper-large)
+faster-whisper
+
+# Thumbnails (optional — FFmpeg fallback available)
+Pillow
+
+# Face detection for smart crop (optional)
+opencv-python-headless

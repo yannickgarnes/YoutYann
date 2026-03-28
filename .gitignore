@@ -1,22 +1,50 @@
-# Python
-venv/
-__pycache__/
-*.py[cod]
+# ═══════════════════════════════════════
+# YoutYann .gitignore
+# ═══════════════════════════════════════
 
-# Credentials (SENSITIVE - DO NOT UPLOAD)
+# Secrets — NEVER commit these
 token.json
 client_secret.json
+*.cookies.txt
 cookies.txt
 
-# Binaries and large files
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+venv/
+.env
+
+# Temp files
+temp/
+*.mp4
+*.mp3
+*.srt
+*.ass
+*.jpg
+*.png
+*.wav
+*.txt.tmp
+
+# FFmpeg binaries
 ffmpeg.exe
 ffprobe.exe
 ffmpeg.zip
 ffmpeg_unzipped/
 
-# Temp files
-temp_audio.mp3
-final_short.mp4
-clip_download.mp4
-clip_download.*
-*.txt.tmp
+# Logs
+*.log
+youtyann.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

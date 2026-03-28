@@ -1,0 +1,84 @@
+name: "🎬 YoutYann v20 — Histórico Engine"
+
+on:
+  # Run 3x daily at optimal posting times (UTC)
+  # 14:00 UTC = 16:00 CEST / 10:00 EST (morning US + afternoon EU)
+  # 18:00 UTC = 20:00 CEST / 14:00 EST (afternoon US peak)
+  # 22:00 UTC = 00:00 CEST / 18:00 EST (evening US peak)
+  schedule:
+    - cron: "0 14 * * *"
+    - cron: "0 18 * * *"
+    - cron: "0 22 * * *"
+
+  # Manual trigger with options
+  workflow_dispatch:
+    inputs:
+      shorts_count:
+        description: "Number of shorts to generate"
+        required: false
+        default: "3"
+      lang_mode:
+        description: "Language mode"
+        required: false
+        default: "BOTH"
+        type: choice
+        options:
+          - EN
+          - ES
+          - BOTH
+      max_attempts:
+        description: "Max attempts per short"
+        required: false
+        default: "5"
+
+jobs:
+  generate-shorts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: 📥 Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: 📦 Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg fonts-dejavu-core
+          ffmpeg -version | head -1
+          echo "✅ FFmpeg + fonts installed"
+
+      - name: 📦 Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          echo "✅ Python deps installed"
+
+      - name: 🎬 Run YoutYann v20
+        env:
+          YOUTUBE_API_KEY: ${{ secrets.YOUTUBE_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          YOUTUBE_TOKEN_JSON: ${{ secrets.YOUTUBE_TOKEN_JSON }}
+          YOUTUBE_COOKIES: ${{ secrets.YOUTUBE_COOKIES }}
+          LANG_MODE: ${{ github.event.inputs.lang_mode || 'BOTH' }}
+          SHORTS_PER_RUN: ${{ github.event.inputs.shorts_count || '3' }}
+          MAX_ATTEMPTS: ${{ github.event.inputs.max_attempts || '5' }}
+          LOOKBACK_DAYS: "14"
+        run: |
+          python viral_bot.py
+
+      - name: 💾 Save state (processed IDs + analytics)
+        if: always()
+        run: |
+          git config --local user.email "youtyann-bot@users.noreply.github.com"
+          git config --local user.name "YoutYann Bot"
+
+          # Only commit if there are changes
+          git add processed_ids.json failed_ids.json analytics.json 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "🤖 Update processed IDs + analytics [$(date -u +%Y-%m-%d)]"
+          git push || echo "⚠️ Push failed (no changes or auth issue)"
