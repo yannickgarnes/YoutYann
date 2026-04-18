@@ -1,1 +1,23 @@
-{"uploads": [], "sessions": []}
+{
+  "uploads": [
+    {
+      "video_id": "NSsy2PtSmYc",
+      "source_id": "GQAioSaX37Q",
+      "source_channel": "Tina",
+      "niche": "comedy",
+      "title": "Instant Regret Button",
+      "duration": 17.0,
+      "timestamp": "2026-04-18T18:32:06.886227"
+    },
+    {
+      "video_id": "gIf-QFhmbAw",
+      "source_id": "Zb-etqew8sg",
+      "source_channel": "Mr Imagica",
+      "niche": "satisfying",
+      "title": "Unbelievable Leaf Craft",
+      "duration": 45.0,
+      "timestamp": "2026-04-18T18:34:28.109225"
+    }
+  ],
+  "sessions": []
+}
